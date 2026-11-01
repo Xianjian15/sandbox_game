@@ -931,7 +931,7 @@ def main():
 
         if selected_colonists:
             hud.draw(screen, colonists, selected_colonists, camera, auto_work)
-            elif selected_building:
+        elif selected_building:
             bhud.draw(screen, selected_building, totals, research_mgr)
         elif selected_stockpile:
             shud.draw(screen)
