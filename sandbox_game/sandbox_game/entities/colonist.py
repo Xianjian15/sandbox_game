@@ -47,7 +47,7 @@ class Colonist:
         self.hit_flash, self.auto_retaliate, self.recent_shot = 0.0, True, None
         self.facing_angle, self.queue = 0.0, []
 
-        # 【新增】防卡死计时器
+        # 防卡死计时器
         self.stuck_timer = 0.0
         self.last_pos = (self.x, self.y)
         self.last_prog = self.work_progress
@@ -97,7 +97,6 @@ class Colonist:
             self.rest += 30.0 * dt
             self.satiety -= 0.05 * dt
 
-            # 无菌病房加速回血
             if self.is_patient and is_sterile:
                 self.bleeding = max(0, self.bleeding - 5.0 * dt)
                 self.hp = min(self.max_hp, self.hp + 5.0 * dt)
@@ -162,17 +161,28 @@ class Colonist:
         return False
 
     def _find_food(self, items, stockpiles, buildings):
+        cx, cy = self.current_tile()
+        candidates = []
+        seen_b = set()
         for b in buildings.buildings.values():
-            if b.kind in ("small_cabinet", "large_cabinet") and not b.marked_for_deconstruction:
+            if id(b) in seen_b: continue
+            seen_b.add(id(b))
+            if b.kind in ("small_cabinet",
+                          "large_cabinet") and not b.marked_for_deconstruction and b.reserved_by is None:
                 for k, amt in b.inventory.items():
-                    if k in ("meal_fine", "meal_simple", "food", "meat") and amt > 0: return (b.tx, b.ty, b)
-        for sp in stockpiles.stockpiles:
-            for (tx, ty) in sp.tiles():
-                for s in items.get_at(tx, ty):
-                    if s.kind in ("meal_fine", "meal_simple", "food", "meat") and s.amount > 0: return (tx, ty, None)
+                    if k in ("meal_fine", "meal_simple", "food", "meat") and amt > 0:
+                        d = abs(b.tx - cx) + abs(b.ty - cy)
+                        candidates.append((d, (b.tx, b.ty, b)))
+
         for (tx, ty, kind), stack in items.stacks.items():
-            if kind in ("meal_fine", "meal_simple", "food", "meat") and stack.amount > 0: return (tx, ty, None)
-        return None
+            if kind in ("meal_fine", "meal_simple", "food", "meat") and stack.amount > 0:
+                d = abs(tx - cx) + abs(ty - cy)
+                candidates.append((d, (tx, ty, None)))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
 
     def _go_eat(self, world, items, food_info, buildings):
         tx, ty, b = food_info
@@ -248,14 +258,12 @@ class Colonist:
         cx, cy = self.current_tile()
         candidates = []
 
-        # 1. 检查地上的物品
         for (tx, ty, k), stack in items.stacks.items():
             if k in need and stack.amount > 0:
                 if getattr(stack, "reserved_by", None) is not None: continue
                 d = abs(tx - cx) + abs(ty - cy)
                 candidates.append((d, (tx, ty, k, None)))
 
-        # 2. 检查柜子里的物品
         seen_b = set()
         for b in buildings.buildings.values():
             if id(b) in seen_b: continue
@@ -270,7 +278,6 @@ class Colonist:
         if not candidates:
             return None
 
-        # 按距离从近到远排序，返回最近的
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
 
@@ -278,7 +285,6 @@ class Colonist:
         cx, cy = self.current_tile()
         candidates = []
 
-        # 1. 检查柜子里的物品
         seen_b = set()
         for b in buildings.buildings.values():
             if id(b) in seen_b: continue
@@ -290,7 +296,6 @@ class Colonist:
                         d = abs(b.tx - cx) + abs(b.ty - cy)
                         candidates.append((d, (b.tx, b.ty, k, b)))
 
-        # 2. 检查地上的物品（库存区里的物品也属于地上的）
         for (tx, ty, k), stack in items.stacks.items():
             if k in kind_list and stack.amount > 0:
                 if getattr(stack, "reserved_by", None) is not None: continue
@@ -300,7 +305,6 @@ class Colonist:
         if not candidates:
             return None
 
-        # 按距离从近到远排序，返回最近的
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
 
@@ -719,7 +723,7 @@ class Colonist:
         self.hit_flash = max(0, self.hit_flash - dt)
         if self.hp <= 0: return
 
-        # 【新增】防卡死机制
+        # 防卡死机制，缩短为 1.5 秒
         moved = abs(self.x - self.last_pos[0]) > 0.1 or abs(self.y - self.last_pos[1]) > 0.1
         worked = abs(self.work_progress - self.last_prog) > 0.1
         if not moved and not worked and self.state not in ("sleeping", "eating") and self.is_busy():
@@ -729,7 +733,7 @@ class Colonist:
             self.last_pos = (self.x, self.y)
             self.last_prog = self.work_progress
 
-        if self.stuck_timer > 3.0:
+        if self.stuck_timer > 1.5:
             self.stuck_timer = 0.0
             self._release_job()
             self.queue.clear()
