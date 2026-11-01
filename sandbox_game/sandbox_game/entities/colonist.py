@@ -46,6 +46,12 @@ class Colonist:
         self.cooldown_timer, self.target_enemy, self.target_animal = 0.0, None, None
         self.hit_flash, self.auto_retaliate, self.recent_shot = 0.0, True, None
         self.facing_angle, self.queue = 0.0, []
+
+        # 【新增】防卡死计时器
+        self.stuck_timer = 0.0
+        self.last_pos = (self.x, self.y)
+        self.last_prog = self.work_progress
+
         rng = random.Random(self.id * 777)
         self.color = (rng.randint(80, 220), rng.randint(80, 220), rng.randint(80, 220))
 
@@ -90,9 +96,12 @@ class Colonist:
         if self.state == "sleeping":
             self.rest += 30.0 * dt
             self.satiety -= 0.05 * dt
+
+            # 无菌病房加速回血
             if self.is_patient and is_sterile:
-                self.bleeding = max(0, self.bleeding - 5.0 * dt)  # 快速止血
-                self.hp = min(self.max_hp, self.hp + 5.0 * dt)  # 每秒恢复 5 点血
+                self.bleeding = max(0, self.bleeding - 5.0 * dt)
+                self.hp = min(self.max_hp, self.hp + 5.0 * dt)
+
             if self.rest >= 100: self.rest = 100; self._wake_up()
         else:
             self.satiety -= 0.25 * dt
@@ -103,7 +112,7 @@ class Colonist:
                 if self.satiety >= 100: self.satiety = 100
                 if self.state_timer <= 0: self.state = None
 
-        if self.bleeding > 0:
+        if self.bleeding > 0 and not (self.state == "sleeping" and self.is_patient and is_sterile):
             self.hp -= self.bleeding * dt
             self.bleeding -= 0.05 * dt
             if self.bleeding < 0: self.bleeding = 0
@@ -211,7 +220,6 @@ class Colonist:
         self.job = {"type": "doctor", "patient": patient, "stage": "to_patient"}
         return True
 
-    # --- 新增：从柜子取物 ---
     def assign_take_from_cabinet(self, world, items, stockpiles, buildings, cabinet, kind):
         if cabinet.inventory.get(kind, 0) <= 0: return False
         adj = self._find_adjacent(world, self.current_tile(), cabinet.tx, cabinet.ty)
@@ -221,6 +229,19 @@ class Colonist:
         self._release_job()
         self.path = p
         self.job = {"type": "take_from_cabinet", "cabinet": cabinet, "kind": kind, "stage": "to_cabinet"}
+        return True
+
+    def assign_equip_from_ground(self, world, items, tx, ty, kind):
+        adj = self._find_adjacent(world, self.current_tile(), tx, ty)
+        if not adj and world.is_walkable(tx, ty): adj = (tx, ty)
+        if not adj: return False
+
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
+
+        self._release_job()
+        self.path = p
+        self.job = {"type": "equip_from_ground", "tx": tx, "ty": ty, "kind": kind, "stage": "to_item"}
         return True
 
     def _find_material_source(self, items, stockpiles, buildings, need):
@@ -635,15 +656,23 @@ class Colonist:
     def _pop_next_command(self):
         while self.queue:
             cmd = self.queue.pop(0)
-            if cmd["type"] == "move" and self.move_to(cmd.get("world"), cmd["tx"], cmd["ty"]): return True
-            elif cmd["type"] == "harvest" and self.assign_harvest(cmd["world"], cmd["tx"], cmd["ty"]): return True
-            elif cmd["type"] == "build" and self.assign_build(cmd["world"], cmd["buildings"], cmd["items"], cmd["stockpiles"], cmd["bp"]): return True
-            elif cmd["type"] == "attack": self.assign_attack(cmd["enemy"]); return True
-            elif cmd["type"] == "hunt": self.assign_hunt(cmd["animal"]); return True
+            if cmd["type"] == "move" and self.move_to(cmd.get("world"), cmd["tx"], cmd["ty"]):
+                return True
+            elif cmd["type"] == "harvest" and self.assign_harvest(cmd["world"], cmd["tx"], cmd["ty"]):
+                return True
+            elif cmd["type"] == "build" and self.assign_build(cmd["world"], cmd["buildings"], cmd["items"],
+                                                              cmd["stockpiles"], cmd["bp"]):
+                return True
+            elif cmd["type"] == "attack":
+                self.assign_attack(cmd["enemy"]); return True
+            elif cmd["type"] == "hunt":
+                self.assign_hunt(cmd["animal"]); return True
             elif cmd["type"] == "craft":
-                if self.assign_craft(cmd["world"], cmd["items"], cmd["stockpiles"], cmd["buildings"], cmd["bench"]): return True
-            elif cmd["type"] == "equip_from_ground": # <--- 新增这一行
-                if self.assign_equip_from_ground(cmd["world"], cmd["items"], cmd["tx"], cmd["ty"], cmd["kind"]): return True
+                if self.assign_craft(cmd["world"], cmd["items"], cmd["stockpiles"], cmd["buildings"],
+                                     cmd["bench"]): return True
+            elif cmd["type"] == "equip_from_ground":
+                if self.assign_equip_from_ground(cmd["world"], cmd["items"], cmd["tx"], cmd["ty"],
+                                                 cmd["kind"]): return True
         return False
 
     def update(self, dt, world=None, items=None, stockpiles=None, buildings=None, enemies=None, game_time=None,
@@ -651,6 +680,27 @@ class Colonist:
         self.cooldown_timer = max(0, self.cooldown_timer - dt)
         self.hit_flash = max(0, self.hit_flash - dt)
         if self.hp <= 0: return
+
+        # 【新增】防卡死机制
+        moved = abs(self.x - self.last_pos[0]) > 0.1 or abs(self.y - self.last_pos[1]) > 0.1
+        worked = abs(self.work_progress - self.last_prog) > 0.1
+        if not moved and not worked and self.state not in ("sleeping", "eating") and self.is_busy():
+            self.stuck_timer += dt
+        else:
+            self.stuck_timer = 0.0
+            self.last_pos = (self.x, self.y)
+            self.last_prog = self.work_progress
+
+        if self.stuck_timer > 3.0:
+            self.stuck_timer = 0.0
+            self._release_job()
+            self.queue.clear()
+            self.target_enemy = None
+            self.target_animal = None
+            self.state = None
+            if self.carrying: self._drop_food(items)
+            print(f"[防卡死] {self.name} 被强制重置")
+
         if world: self._push_out_of_wall(world)
 
         if self.is_patient and self.state == "sleeping": return
@@ -773,32 +823,10 @@ class Colonist:
         j = self.job
         jt = j["type"]
 
-        if jt == "build" and j["bp"].reserved_by != self.id:
-            self._release_job()
-            return
-
-        if jt == "equip_from_ground":
-            if j["stage"] == "to_item":
-                if self.current_tile() == (j["tx"], j["ty"]) or self._find_adjacent(world, self.current_tile(), j["tx"],
-                                                                                    j["ty"]):
-                    # 检查物品是否还在地上
-                    found = False
-                    for s in items.get_at(j["tx"], j["ty"]):
-                        if s.kind == j["kind"]:
-                            s.amount -= 1
-                            if s.amount <= 0: items.remove_at(j["tx"], j["ty"])
-                            found = True
-                            break
-
-                    if found:
-                        # 强制装备，把手里旧的丢在地上
-                        if self.weapon_key != "fist":
-                            items.add(self.weapon_key, 1, *self.current_tile())
-                        self.equip_weapon(j["kind"])
-                    self._release_job()
-                else:
-                    self._release_job()
-            return
+        if jt == "build":
+            if j["bp"].reserved_by != self.id or (j["bp"].tx, j["bp"].ty, j["bp"].layer) not in buildings.blueprints:
+                self._release_job()
+                return
 
         if jt == "doctor":
             patient = j["patient"]
@@ -830,6 +858,26 @@ class Colonist:
                         self._release_job()
                 else:
                     self._release_job()
+
+        elif jt == "equip_from_ground":
+            if j["stage"] == "to_item":
+                if self.current_tile() == (j["tx"], j["ty"]) or self._find_adjacent(world, self.current_tile(), j["tx"],
+                                                                                    j["ty"]):
+                    found = False
+                    for s in items.get_at(j["tx"], j["ty"]):
+                        if s.kind == j["kind"]:
+                            s.amount -= 1
+                            if s.amount <= 0: items.remove_at(j["tx"], j["ty"])
+                            found = True
+                            break
+                    if found:
+                        if self.weapon_key != "fist":
+                            items.add(self.weapon_key, 1, *self.current_tile())
+                        self.equip_weapon(j["kind"])
+                    self._release_job()
+                else:
+                    self._release_job()
+            return
 
         elif jt == "take_from_cabinet":
             cabinet = j["cabinet"]
@@ -1454,7 +1502,7 @@ class Colonist:
         elif self.job:
             labels = {"harvest": "采集", "haul": "搬运", "build": "建造", "deconstruct": "拆除", "research": "研究",
                       "cook": "烹饪", "farm": "农业", "craft": "制作", "smelt": "熔炼", "doctor": "医疗",
-                      "take_from_cabinet": "取物"}
+                      "take_from_cabinet": "取物", "equip_from_ground": "拾取装备"}
             label, color = labels.get(self.job["type"], "工作"), (255, 220, 100)
         if label: surface.blit(font.render(label, True, color), (sx - font.size(label)[0] / 2, sy + self.radius + 20))
         if self.state == "sleeping":
