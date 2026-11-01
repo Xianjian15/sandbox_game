@@ -33,10 +33,17 @@ BUILDING_DEFS = {
     "small_cabinet": {"name": "小柜子", "layer": 1, "walkable": False, "w": 1, "h": 1, "max_types": 5, "variants": {
         "wood": {"name": "小木柜", "cost": {"wood": 6}, "hp": 100, "build_time": 40, "color": (150, 110, 70)}}},
     "large_cabinet": {"name": "大柜子", "layer": 1, "walkable": False, "w": 1, "h": 2, "max_types": 10, "variants": {
-        "wood": {"name": "大木柜", "cost": {"wood": 12}, "hp": 150, "build_time": 60, "color": (140, 100, 60)}}}
+        "wood": {"name": "大木柜", "cost": {"wood": 12}, "hp": 150, "build_time": 60, "color": (140, 100, 60)}}},
+
+    # --- 新增：无菌设施 ---
+    "sterile_floor": {"name": "无菌地面", "layer": 0, "walkable": True, "w": 1, "h": 1, "variants": {
+        "iron": {"name": "无菌地面", "cost": {"iron": 2}, "hp": 100, "build_time": 40, "color": (200, 210, 220)}}},
+    "sterile_wall": {"name": "无菌墙", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
+        "iron": {"name": "无菌墙", "cost": {"iron": 3}, "hp": 150, "build_time": 50, "color": (180, 190, 200)}}}
 }
 
 
+# ----------------- 以下部分保持原样，直接复制 -----------------
 class Blueprint:
     def __init__(self, kind, material, tx, ty, rotation=0):
         self.kind, self.material, self.tx, self.ty, self.rotation = kind, material, tx, ty, rotation
@@ -122,6 +129,11 @@ class Building:
         if self.kind == "floor":
             pygame.draw.rect(surface, color, rect);
             pygame.draw.rect(surface, (130, 95, 55), rect, 1)
+        elif self.kind == "sterile_floor":
+            pygame.draw.rect(surface, color, rect)
+            pygame.draw.rect(surface, (150, 160, 170), rect, 1)
+            pygame.draw.line(surface, (150, 160, 170), (sx, sy), (sx + W, sy + H), 1)
+            pygame.draw.line(surface, (150, 160, 170), (sx + W, sy), (sx, sy + H), 1)
         elif self.kind == "wall":
             pygame.draw.rect(surface, color, rect)
             line_col = (70, 70, 75) if self.material == "stone" else (90, 60, 30)
@@ -129,6 +141,12 @@ class Building:
             for i in range(1, self.h * 3):
                 yy = sy + i * TILE_SIZE // 3
                 if yy < sy + H: pygame.draw.line(surface, line_col, (sx, yy), (sx + W, yy), 1)
+        elif self.kind == "sterile_wall":
+            pygame.draw.rect(surface, color, rect)
+            pygame.draw.rect(surface, (120, 130, 140), rect, 2)
+            for i in range(1, self.h * 3):
+                yy = sy + i * TILE_SIZE // 3
+                if yy < sy + H: pygame.draw.line(surface, (120, 130, 140), (sx, yy), (sx + W, yy), 1)
         elif self.kind == "window":
             frame = (100, 100, 105) if self.material == "stone" else (130, 90, 50)
             pygame.draw.rect(surface, frame, rect)

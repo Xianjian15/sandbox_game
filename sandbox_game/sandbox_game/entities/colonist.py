@@ -82,12 +82,17 @@ class Colonist:
         if self.hp <= 0: return
 
         beauty = 0
+        is_sterile = False
         if Colonist._room_mgr_ref:
             beauty = Colonist._room_mgr_ref.get_beauty_at(*self.current_tile())
+            is_sterile = Colonist._room_mgr_ref.is_in_sterile_room(*self.current_tile())
 
         if self.state == "sleeping":
             self.rest += 30.0 * dt
             self.satiety -= 0.05 * dt
+            if self.is_patient and is_sterile:
+                self.bleeding = max(0, self.bleeding - 5.0 * dt)  # 快速止血
+                self.hp = min(self.max_hp, self.hp + 5.0 * dt)  # 每秒恢复 5 点血
             if self.rest >= 100: self.rest = 100; self._wake_up()
         else:
             self.satiety -= 0.25 * dt
