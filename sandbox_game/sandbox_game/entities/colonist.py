@@ -245,26 +245,64 @@ class Colonist:
         return True
 
     def _find_material_source(self, items, stockpiles, buildings, need):
+        cx, cy = self.current_tile()
+        candidates = []
+
+        # 1. 检查地上的物品
         for (tx, ty, k), stack in items.stacks.items():
-            if k in need and stack.amount > 0: return (tx, ty, k, None)
+            if k in need and stack.amount > 0:
+                if getattr(stack, "reserved_by", None) is not None: continue
+                d = abs(tx - cx) + abs(ty - cy)
+                candidates.append((d, (tx, ty, k, None)))
+
+        # 2. 检查柜子里的物品
+        seen_b = set()
         for b in buildings.buildings.values():
-            if b.kind in ("small_cabinet", "large_cabinet") and not b.marked_for_deconstruction:
+            if id(b) in seen_b: continue
+            seen_b.add(id(b))
+            if b.kind in ("small_cabinet",
+                          "large_cabinet") and not b.marked_for_deconstruction and b.reserved_by is None:
                 for k, amt in b.inventory.items():
-                    if k in need and amt > 0: return (b.tx, b.ty, k, b)
-        return None
+                    if k in need and amt > 0:
+                        d = abs(b.tx - cx) + abs(b.ty - cy)
+                        candidates.append((d, (b.tx, b.ty, k, b)))
+
+        if not candidates:
+            return None
+
+        # 按距离从近到远排序，返回最近的
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
 
     def _find_food_ingredient(self, items, stockpiles, buildings, kind_list):
+        cx, cy = self.current_tile()
+        candidates = []
+
+        # 1. 检查柜子里的物品
+        seen_b = set()
         for b in buildings.buildings.values():
-            if b.kind in ("small_cabinet", "large_cabinet") and not b.marked_for_deconstruction:
+            if id(b) in seen_b: continue
+            seen_b.add(id(b))
+            if b.kind in ("small_cabinet",
+                          "large_cabinet") and not b.marked_for_deconstruction and b.reserved_by is None:
                 for k in kind_list:
-                    if b.inventory.get(k, 0) > 0: return (b.tx, b.ty, k, b)
-        for sp in stockpiles.stockpiles:
-            for (tx, ty) in sp.tiles():
-                for s in items.get_at(tx, ty):
-                    if s.kind in kind_list and s.amount > 0: return (tx, ty, s.kind, None)
+                    if b.inventory.get(k, 0) > 0:
+                        d = abs(b.tx - cx) + abs(b.ty - cy)
+                        candidates.append((d, (b.tx, b.ty, k, b)))
+
+        # 2. 检查地上的物品（库存区里的物品也属于地上的）
         for (tx, ty, k), stack in items.stacks.items():
-            if k in kind_list and stack.amount > 0: return (tx, ty, k, None)
-        return None
+            if k in kind_list and stack.amount > 0:
+                if getattr(stack, "reserved_by", None) is not None: continue
+                d = abs(tx - cx) + abs(ty - cy)
+                candidates.append((d, (tx, ty, k, None)))
+
+        if not candidates:
+            return None
+
+        # 按距离从近到远排序，返回最近的
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
 
     def assign_harvest(self, world, tx, ty):
         if not world.is_harvestable(tx, ty): return False
