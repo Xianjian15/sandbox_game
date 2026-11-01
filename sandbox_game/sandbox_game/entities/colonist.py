@@ -1019,11 +1019,12 @@ class Colonist:
                 buildings.remove_building(tx, ty, layer)
                 self._release_job()
         elif jt == "research":
-            b = buildings.get_building_at(j["tx"], j["ty"])
-            if not b or b.marked_for_deconstruction or not research or not research.current_research:
-                self._release_job()
-                return
-            research.add_progress(self.work_speed * 0.1 * dt)
+                b = buildings.get_building_at(j["tx"], j["ty"])
+                if not b or b.marked_for_deconstruction or not research or not research.current_research:
+                    self._release_job()
+                    return
+                self.work_progress += self.work_speed * dt  # 【修复】加上这一句，防止被防卡死误杀
+                research.add_progress(self.work_speed * 0.1 * dt)
 
         elif jt == "cook":
             stove = j["stove"]

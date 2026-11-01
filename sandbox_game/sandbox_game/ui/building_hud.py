@@ -18,7 +18,7 @@ class BuildingHUD:
         self.active_input = None
         self.edit_text = ""
 
-        self.item_rects = {}  # 存储物品点击热区，格式：{kind: rect}
+        self.item_rects = {}
         self.last_action = None
 
     def get_counts(self, selected_building):
@@ -89,7 +89,8 @@ class BuildingHUD:
             return True
         return False
 
-    def handle_click(self, mouse_pos, selected_building, global_items):
+    # 【修改】接收 research 参数
+    def handle_click(self, mouse_pos, selected_building, global_items, research):
         if not selected_building: return False, None
         self.last_action = None
 
@@ -99,7 +100,6 @@ class BuildingHUD:
                     selected_building.marked_for_deconstruction = True
                     return True, None
 
-                # 点击柜子物品
                 if selected_building.kind in ("small_cabinet", "large_cabinet"):
                     for kind, rect in self.item_rects.items():
                         if rect.collidepoint(mouse_pos):
@@ -138,10 +138,10 @@ class BuildingHUD:
             self.active_input = None
         return False, None
 
-    def draw(self, surface, selected_building, global_items):
+    # 【修改】接收 research 参数
+    def draw(self, surface, selected_building, global_items, research):
         if not selected_building: return
 
-        # 【修复】直接获取当前屏幕宽度，动态调整位置
         screen_w = surface.get_width()
         if selected_building.kind in ("small_cabinet", "large_cabinet"):
             self.panel_rect.x = screen_w - self.panel_w - 20
@@ -153,7 +153,7 @@ class BuildingHUD:
         if selected_building.kind in ("stove", "furnace", "workbench"):
             h = 380
         elif selected_building.kind in ("small_cabinet", "large_cabinet"):
-            h = 500  # 【修复】加高面板，完美容纳10个物品和按钮
+            h = 500
         else:
             h = 300
 
@@ -264,19 +264,34 @@ class BuildingHUD:
             r4 = pygame.Rect(x + 10, y + 170, 80, 30);
             r5 = pygame.Rect(x + 100, y + 170, 80, 30)
 
+            # 【新增】判断科技解锁状态
+            can_iron = research and "crafting" in research.completed
+            can_gun = research and "gunsmithing" in research.completed
+
+            col2 = (150, 150, 150) if can_iron else (60, 60, 60)
+            col3 = (150, 150, 150) if can_iron else (60, 60, 60)
+            col4 = (200, 200, 210) if can_iron else (60, 60, 60)
+            col5 = (100, 120, 180) if can_gun else (60, 60, 60)
+
             pygame.draw.rect(surface, (130, 130, 135), r1, border_radius=4);
             surface.blit(self.font.render("石镐(2石)", True, (0, 0, 0)), (x + 15, y + 137))
-            pygame.draw.rect(surface, (150, 150, 150), r2, border_radius=4);
+            pygame.draw.rect(surface, col2, r2, border_radius=4);
             surface.blit(self.font.render("铁斧(2铁)", True, (0, 0, 0)), (x + 105, y + 137))
-            pygame.draw.rect(surface, (150, 150, 150), r3, border_radius=4);
+            pygame.draw.rect(surface, col3, r3, border_radius=4);
             surface.blit(self.font.render("铁镐(2铁)", True, (0, 0, 0)), (x + 195, y + 137))
-            pygame.draw.rect(surface, (200, 200, 210), r4, border_radius=4);
+            pygame.draw.rect(surface, col4, r4, border_radius=4);
             surface.blit(self.font.render("长剑(3铁)", True, (0, 0, 0)), (x + 15, y + 177))
-            pygame.draw.rect(surface, (100, 120, 180), r5, border_radius=4);
+            pygame.draw.rect(surface, col5, r5, border_radius=4);
             surface.blit(self.font.render("枪械(5铁)", True, (255, 255, 255)), (x + 105, y + 177))
 
-            self.btn_rects["craft_stone_pick"], self.btn_rects["craft_axe"], self.btn_rects["craft_pick"] = r1, r2, r3
-            self.btn_rects["craft_sword"], self.btn_rects["craft_gun"] = r4, r5
+            self.btn_rects["craft_stone_pick"] = r1
+            if can_iron:
+                self.btn_rects["craft_axe"] = r2
+                self.btn_rects["craft_pick"] = r3
+                self.btn_rects["craft_sword"] = r4
+            if can_gun:
+                self.btn_rects["craft_gun"] = r5
+
             surface.blit(self.font.render(f"制造队列: {len(selected_building.craft_queue)}", True, WHITE),
                          (x + 10, y + 215))
 
@@ -284,7 +299,6 @@ class BuildingHUD:
             pygame.draw.line(surface, (80, 80, 80), (x + 10, y + 85), (x + w - 10, y + 85), 1)
             surface.blit(self.font.render("内部物品:", True, (200, 200, 100)), (x + 10, y + 95))
 
-            # 【修复】加大间距和初始 Y 坐标，让列表完美展开
             y_off = y + 125
             sorted_items = list(selected_building.inventory.items())
 
@@ -304,7 +318,7 @@ class BuildingHUD:
                         pygame.draw.rect(surface, (80, 80, 120), item_rect, border_radius=4)
 
                     surface.blit(txt, (x + 40, y_off))
-                y_off += 32  # 间距改为 32，更舒适
+                y_off += 32
 
             pygame.draw.line(surface, (80, 80, 80), (x + 10, y + h - 75), (x + w - 10, y + h - 75), 1)
             types_used = len(selected_building.inventory)

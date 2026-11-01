@@ -368,7 +368,7 @@ def main():
                                             c.state = None
                                         selected[0].assign_equip_from_ground(world, items, tx, ty, hit_item.kind)
                                     else:
-                                        for c in selected: c.enqueue_command(cmd)
+                                      for c in selected: c.enqueue_command(cmd)
                                 else:
                                     # 原有的搬运逻辑
                                     cabinet = None
@@ -480,7 +480,7 @@ def main():
                     left_down_pos = None
                     continue
 
-                consumed, action = bhud.handle_click(event.pos, selected_building, global_items)
+                consumed, action = bhud.handle_click(event.pos, selected_building, global_items, research_mgr)
                 if consumed:
                     # 处理点击柜子物品指派
                     if bhud.last_action and bhud.last_action[0] == "take":
@@ -775,6 +775,47 @@ def main():
                     if c.is_idle():
                         c.try_find_job(world, items, stockpiles, buildings, research_mgr, animals, farms.farms)
 
+            if not hasattr(main, "debug_timer"):
+                main.debug_timer = 0.0
+            main.debug_timer += dt
+            if main.debug_timer >= 2.0:  # 每 2 秒打印一次状态
+                main.debug_timer = 0.0
+                print("\n========== 游戏状态检测 ==========")
+                print(f"全局自动工作: {auto_work}")
+
+                # 1. 打印小人状态
+                for c in colonists:
+                    state_str = "忙碌" if c.is_busy() else "空闲"
+                    if c.is_patient: state_str = "病患"
+
+                    job_type = c.job["type"] if c.job else "None"
+                    stage = c.job.get("stage", "") if c.job else ""
+                    path_len = len(c.path)
+                    carry = c.carrying["kind"] if c.carrying else "无"
+                    stuck = c.stuck_timer
+
+                    print(
+                        f"[{c.name}] 状态: {state_str} | 卡死计时: {stuck:.1f}s | 任务: {job_type}({stage}) | 路径: {path_len} | 拿: {carry}")
+
+                    # 如果卡死计时异常，多打印点信息
+                    if stuck > 0.5:
+                        print(f"  --> 警告: {c.name} 似乎卡住了！坐标: {c.current_tile()}")
+
+                # 2. 打印蓝图状态
+                print("--- 蓝图状态 ---")
+                if not buildings.blueprints:
+                    print("没有蓝图")
+                else:
+                    printed_bps = set()
+                    for k, bp in buildings.blueprints.items():
+                        if id(bp) in printed_bps: continue
+                        printed_bps.add(id(bp))
+
+                        missing = bp.missing_materials()
+                        mat_str = "齐了" if not missing else f"缺 {missing}"
+                        print(f"蓝图({bp.tx},{bp.ty}) {bp.kind} | 材料: {mat_str} | 预定者ID: {bp.reserved_by}")
+                print("==================================\n")
+
             effects = [ef for ef in effects if ef.update(dt)]
 
         log.update(dt_raw)
@@ -890,8 +931,8 @@ def main():
 
         if selected_colonists:
             hud.draw(screen, colonists, selected_colonists, camera, auto_work)
-        elif selected_building:
-            bhud.draw(screen, selected_building, totals)
+            elif selected_building:
+            bhud.draw(screen, selected_building, totals, research_mgr)
         elif selected_stockpile:
             shud.draw(screen)
         elif selected_item_stack:
