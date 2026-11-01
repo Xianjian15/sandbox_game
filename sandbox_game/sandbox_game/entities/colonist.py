@@ -5,66 +5,47 @@ import math
 from settings import TILE_SIZE, WHITE, SELECT
 from core.pathfinding import astar
 from world.buildings import BUILDING_DEFS
-from world.world import T_ROCK, T_TREE, T_BERRY
+from world.world import T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK
 from world.items import ITEM_DEFS
-from combat.weapons import get_weapon
+from combat.weapons import get_weapon, WEAPONS
 from combat.weapon_render import draw_weapon
 
-DEFAULT_PRIORITIES = {"harvest": 2, "haul": 3, "build": 3, "research": 1, "hunt": 3, "farm": 2, "cook": 3}
+DEFAULT_PRIORITIES = {"harvest": 2, "haul": 3, "build": 3, "research": 1, "hunt": 3, "farm": 2, "cook": 3, "craft": 3,
+                      "smelt": 3, "doctor": 3}
 
 
 class Colonist:
-    _id_counter = 0
-    _reserved_harvests = set()
-    _items_ref = None
-    _buildings_ref = None
+    _id_counter, _reserved_harvests = 0, set()
+    _items_ref, _buildings_ref, _room_mgr_ref, _all_colonists = None, None, None, []
 
-    def __init__(self, tx, ty, name=None, weapon_key="pistol"):
+    def __init__(self, tx, ty, name=None, weapon_key="fist"):
         Colonist._id_counter += 1
         self.id = Colonist._id_counter
-        self.x = tx * TILE_SIZE + TILE_SIZE / 2
-        self.y = ty * TILE_SIZE + TILE_SIZE / 2
+        self.x, self.y = tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2
         self.name = name or f"小人{self.id}"
-        self.hp = 100
-        self.max_hp = 100
-        self.speed = 3.5 * TILE_SIZE
+        self.hp, self.max_hp = 100, 100
+        self.base_speed, self.base_work_speed = 3.5 * TILE_SIZE, 30.0
+        self.speed, self.work_speed = self.base_speed, self.base_work_speed
+
         self.radius = TILE_SIZE // 2 - 4
-
-        self.path = []
-        self.selected = False
-        self.job = None
+        self.path, self.selected, self.job = [], False, None
         self.work_progress = 0.0
-        self.work_speed = 30.0
         self.priorities = dict(DEFAULT_PRIORITIES)
-        self.auto_harvest = False
-        self.auto_hunt = False
+        self.auto_harvest, self.auto_hunt = False, False
+        self.carry_limit, self.carrying = 20, None
+        self.satiety, self.rest, self.mood = 100.0, 100.0, 100.0
 
-        self.carry_limit = 20
-        self.carrying = None
+        self.bleeding = 0.0
+        self.is_patient = False
+        self.doctor_target = None
 
-        self.satiety = 100.0
-        self.rest = 100.0
-        self.mood = 100.0
-
-        self.state = None
-        self.state_timer = 0.0
-        self.bed_tile = None
-        self._eat_target = None
-
+        self.state, self.state_timer, self.bed_tile, self._eat_target = None, 0.0, None, None
         self.weapon_key = weapon_key
         w = get_weapon(weapon_key)
-        self.attack_range = w["range"] * TILE_SIZE
-        self.attack_damage = w["damage"]
-        self.attack_cooldown = w["cooldown"]
-        self.cooldown_timer = 0.0
-        self.target_enemy = None
-        self.target_animal = None
-        self.hit_flash = 0.0
-        self.auto_retaliate = True
-        self.recent_shot = None
-        self.facing_angle = 0.0
-        self.queue = []
-
+        self.attack_range, self.attack_damage, self.attack_cooldown = w["range"] * TILE_SIZE, w["damage"], w["cooldown"]
+        self.cooldown_timer, self.target_enemy, self.target_animal = 0.0, None, None
+        self.hit_flash, self.auto_retaliate, self.recent_shot = 0.0, True, None
+        self.facing_angle, self.queue = 0.0, []
         rng = random.Random(self.id * 777)
         self.color = (rng.randint(80, 220), rng.randint(80, 220), rng.randint(80, 220))
 
@@ -75,179 +56,166 @@ class Colonist:
         return int(self.x // TILE_SIZE), int(self.y // TILE_SIZE)
 
     def is_idle(self):
-        return (self.job is None and not self.path and not self.queue
-                and self.target_enemy is None and self.target_animal is None
-                and self.hp > 0 and self.state is None)
+        return (self.job is None and not self.path and not self.queue and self.target_enemy is None
+                and self.target_animal is None and self.hp > 0 and self.state is None and not self.is_patient)
 
     def is_busy(self):
-        return (self.job is not None or self.path or self.queue
-                or self.target_enemy is not None or self.target_animal is not None
-                or self.state is not None)
+        return (self.job is not None or self.path or self.queue or self.target_enemy is not None
+                or self.target_animal is not None or self.state is not None or self.is_patient)
+
+    def equip_weapon(self, new_key):
+        if new_key in WEAPONS:
+            self.weapon_key = new_key
+            w = get_weapon(new_key)
+            self.attack_range, self.attack_damage, self.attack_cooldown = w["range"] * TILE_SIZE, w["damage"], w[
+                "cooldown"]
 
     def take_damage(self, amount, attacker=None):
         self.hp -= amount
         self.hit_flash = 0.15
+        self.bleeding += amount * 0.05
         if self.state == "sleeping": self._wake_up()
-        if attacker is not None and self.auto_retaliate and self.target_enemy is None:
-            self.target_enemy = attacker
+        if attacker is not None and self.auto_retaliate and self.target_enemy is None: self.target_enemy = attacker
         return self.hp <= 0
 
     def update_needs(self, dt, game_time):
         if self.hp <= 0: return
 
+        beauty = 0
+        if Colonist._room_mgr_ref:
+            beauty = Colonist._room_mgr_ref.get_beauty_at(*self.current_tile())
+
         if self.state == "sleeping":
             self.rest += 30.0 * dt
             self.satiety -= 0.05 * dt
-            if self.rest >= 100:
-                self.rest = 100
-                self._wake_up()
+            if self.rest >= 100: self.rest = 100; self._wake_up()
         else:
             self.satiety -= 0.25 * dt
-            night_mul = 3.0 if game_time.is_night else 1.0
-            self.rest -= 0.12 * dt * night_mul
-
+            self.rest -= 0.12 * dt * (3.0 if game_time.is_night else 1.0)
             if self.state == "eating":
                 self.satiety += 80.0 * dt
                 self.state_timer -= dt
                 if self.satiety >= 100: self.satiety = 100
                 if self.state_timer <= 0: self.state = None
 
-        self.satiety = max(0, min(100, self.satiety))
-        self.rest = max(0, min(100, self.rest))
+        if self.bleeding > 0:
+            self.hp -= self.bleeding * dt
+            self.bleeding -= 0.05 * dt
+            if self.bleeding < 0: self.bleeding = 0
+            if self.hp <= 0: return
+
+        self.satiety, self.rest = max(0, min(100, self.satiety)), max(0, min(100, self.rest))
 
         mood_target = 100
         if self.satiety < 30: mood_target -= (30 - self.satiety) * 1.5
         if self.rest < 30: mood_target -= (30 - self.rest) * 1.5
+        if self.hp < 50: mood_target -= (50 - self.hp) * 1.0
         if self.state == "eating": mood_target += 10
+        mood_target = min(100, mood_target + beauty * 0.1)
+
         self.mood += (mood_target - self.mood) * dt * 0.5
         self.mood = max(0, min(100, self.mood))
 
+        if self.satiety <= 0 or self.rest <= 0:
+            self.speed = self.base_speed * 0.75
+            self.work_speed = self.base_work_speed * 0.75
+        elif self.mood > 80:
+            boost = 1.0 + (self.mood - 80) / 100.0
+            self.speed = self.base_speed * boost
+            self.work_speed = self.base_work_speed * boost
+        else:
+            self.speed = self.base_speed
+            self.work_speed = self.base_work_speed
+
     def check_urgent_needs(self, world, items, stockpiles, buildings):
-        if self.target_enemy is not None or self.hp <= 0 or self.state is not None: return False
+        if self.target_enemy is not None or self.hp <= 0 or self.state is not None or self.is_patient: return False
+
+        if self.hp < 40 and self.bleeding > 0:
+            bed = buildings.find_free_medical_bed(self.id)
+            if bed and self._go_sleep(world, buildings, bed, is_medical=True): return True
 
         if self.rest <= 30:
-            bed_tile = buildings.find_free_bed(exclude_colonist=self.id)
-            if bed_tile is not None:
-                if self._go_sleep(world, buildings, bed_tile): return True
-
+            bed = buildings.find_free_bed(self.id)
+            if bed and self._go_sleep(world, buildings, bed): return True
         if self.satiety <= 40:
             if self.carrying and self.carrying["kind"] in ("meal_fine", "meal_simple"):
-                food_kind = self.carrying["kind"]
                 self.carrying["amount"] -= 1
                 if self.carrying["amount"] <= 0: self.carrying = None
-                self.state = "eating"
-                self.state_timer = 0.8
+                self.state, self.state_timer = "eating", 0.8
                 return True
-
-            food_pos = self._find_food(items, stockpiles, buildings)
-            if food_pos is not None:
-                if self._go_eat(world, items, food_pos, buildings): return True
+            food = self._find_food(items, stockpiles, buildings)
+            if food and self._go_eat(world, items, food, buildings): return True
         return False
 
     def _find_food(self, items, stockpiles, buildings):
         for b in buildings.buildings.values():
             if b.kind in ("small_cabinet", "large_cabinet") and not b.marked_for_deconstruction:
                 for k, amt in b.inventory.items():
-                    if k in ("meal_fine", "meal_simple", "food", "meat") and amt > 0:
-                        return (b.tx, b.ty, b)
+                    if k in ("meal_fine", "meal_simple", "food", "meat") and amt > 0: return (b.tx, b.ty, b)
         for sp in stockpiles.stockpiles:
             for (tx, ty) in sp.tiles():
                 for s in items.get_at(tx, ty):
-                    if s.kind in ("meal_fine", "meal_simple", "food", "meat") and s.amount > 0:
-                        return (tx, ty, None)
+                    if s.kind in ("meal_fine", "meal_simple", "food", "meat") and s.amount > 0: return (tx, ty, None)
         for (tx, ty, kind), stack in items.stacks.items():
-            if kind in ("meal_fine", "meal_simple", "food", "meat") and stack.amount > 0:
-                return (tx, ty, None)
+            if kind in ("meal_fine", "meal_simple", "food", "meat") and stack.amount > 0: return (tx, ty, None)
         return None
 
     def _go_eat(self, world, items, food_info, buildings):
         tx, ty, b = food_info
-        cur = self.current_tile()
-        adj = (tx, ty) if world.is_walkable(tx, ty) else self._find_adjacent(world, cur, tx, ty)
-        if adj is None: return False
-        p = astar(world, cur, adj)
-        if p is None: return False
+        adj = (tx, ty) if world.is_walkable(tx, ty) else self._find_adjacent(world, self.current_tile(), tx, ty)
+        if not adj: return False
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
         self.queue.clear()
         self._release_job()
-        self.path = p
-        self.state = "going_to_eat"
-        self.state_timer = 0.0
+        self.path, self.state, self.state_timer = p, "going_to_eat", 0.0
         self._eat_target = (tx, ty, b)
         return True
 
-    def _go_sleep(self, world, buildings, bed_tile):
-        cur = self.current_tile()
-        p = astar(world, cur, bed_tile)
-        if p is None: return False
+    def _go_sleep(self, world, buildings, bed_tile, is_medical=False):
+        p = astar(world, self.current_tile(), bed_tile)
+        if not p: return False
         self.queue.clear()
         self._release_job()
-        self.path = p
-        self.state = "going_to_sleep"
-        self.bed_tile = bed_tile
+        self.path, self.state, self.bed_tile = p, "going_to_sleep", bed_tile
         b = buildings.get_building_at(bed_tile[0], bed_tile[1])
-        if b is not None: b.occupied_by = self.id
+        if b:
+            b.occupied_by = self.id
+            if is_medical: self.is_patient = True
         return True
 
     def _wake_up(self):
-        if self.bed_tile is not None:
-            b = Colonist._buildings_ref.get_building_at(self.bed_tile[0],
-                                                        self.bed_tile[1]) if Colonist._buildings_ref else None
-            if b is not None and b.occupied_by == self.id: b.occupied_by = None
-        self.bed_tile = None
-        self.state = None
+        if self.bed_tile and Colonist._buildings_ref:
+            b = Colonist._buildings_ref.get_building_at(self.bed_tile[0], self.bed_tile[1])
+            if b and b.occupied_by == self.id: b.occupied_by = None
+        self.bed_tile, self.state, self.is_patient = None, None, False
 
     def move_to(self, world, tx, ty):
-        cur = self.current_tile()
-        path = astar(world, cur, (tx, ty))
-        if path is not None:
-            self.path = path
-            return True
+        p = astar(world, self.current_tile(), (tx, ty))
+        if p: self.path = p; return True
         return False
 
-    def assign_harvest(self, world, tx, ty):
-        if not world.is_harvestable(tx, ty): return False
-        candidates = self._find_adjacent_all(world, tx, ty)
-        if not candidates: return False
-        cur = self.current_tile()
-        best_path, best_target = None, None
-        for cand in candidates:
-            p = astar(world, cur, cand)
-            if p is not None and (best_path is None or len(p) < len(best_path)):
-                best_path, best_target = p, cand
-        if best_path is None: return False
-        self._release_job()
-        self.path = best_path
-        self.job = {"type": "harvest", "tx": tx, "ty": ty, "adjacent": best_target}
-        self.work_progress = 0.0
-        Colonist._reserved_harvests.add((tx, ty))
-        return True
-
-    def assign_deconstruct(self, world, buildings, tx, ty, layer):
-        cur = self.current_tile()
-        adj = self._find_adjacent(world, cur, tx, ty)
-        if adj is None:
-            if world.is_walkable(tx, ty):
-                adj = (tx, ty)
-            else:
-                return False
-        p = astar(world, cur, adj)
-        if p is None: return False
+    def assign_doctor(self, world, items, stockpiles, buildings, patient):
+        if not self._find_material_source(items, stockpiles, buildings, {"medicine": 1}): return False
+        adj = self._find_adjacent(world, self.current_tile(), *patient.current_tile())
+        if not adj: return False
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
         self._release_job()
         self.path = p
-        self.job = {"type": "deconstruct", "tx": tx, "ty": ty, "layer": layer}
-        self.work_progress = 0.0
+        self.job = {"type": "doctor", "patient": patient, "stage": "to_patient"}
         return True
 
-    def assign_haul(self, world, items, stockpiles, src_tx, src_ty, dst_tx, dst_ty, kind, amount, cabinet=None):
-        cur = self.current_tile()
-        adj = self._find_adjacent(world, cur, src_tx, src_ty)
-        if adj is None: return False
-        path1 = astar(world, cur, adj)
-        if path1 is None: return False
+    # --- 新增：从柜子取物 ---
+    def assign_take_from_cabinet(self, world, items, stockpiles, buildings, cabinet, kind):
+        if cabinet.inventory.get(kind, 0) <= 0: return False
+        adj = self._find_adjacent(world, self.current_tile(), cabinet.tx, cabinet.ty)
+        if not adj: return False
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
         self._release_job()
-        self.path = path1
-        self.job = {"type": "haul", "src": (src_tx, src_ty), "dst": (dst_tx, dst_ty),
-                    "kind": kind, "amount": amount, "stage": "to_src", "cabinet": cabinet}
+        self.path = p
+        self.job = {"type": "take_from_cabinet", "cabinet": cabinet, "kind": kind, "stage": "to_cabinet"}
         return True
 
     def _find_material_source(self, items, stockpiles, buildings, need):
@@ -272,14 +240,51 @@ class Colonist:
             if k in kind_list and stack.amount > 0: return (tx, ty, k, None)
         return None
 
+    def assign_harvest(self, world, tx, ty):
+        if not world.is_harvestable(tx, ty): return False
+        if world.get(tx, ty) == T_IRON_ROCK and self.weapon_key not in ("stone_pickaxe", "iron_pickaxe"): return False
+        cands = self._find_adjacent_all(world, tx, ty)
+        best_p, best_t = None, None
+        for cand in cands:
+            p = astar(world, self.current_tile(), cand)
+            if p and (best_p is None or len(p) < len(best_p)): best_p, best_t = p, cand
+        if not best_p: return False
+        self._release_job()
+        self.path, self.job = best_p, {"type": "harvest", "tx": tx, "ty": ty, "adjacent": best_t}
+        self.work_progress = 0.0
+        Colonist._reserved_harvests.add((tx, ty))
+        return True
+
+    def assign_deconstruct(self, world, buildings, tx, ty, layer):
+        adj = self._find_adjacent(world, self.current_tile(), tx, ty)
+        if not adj and world.is_walkable(tx, ty): adj = (tx, ty)
+        if not adj: return False
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
+        self._release_job()
+        self.path, self.job, self.work_progress = p, {"type": "deconstruct", "tx": tx, "ty": ty, "layer": layer}, 0.0
+        return True
+
+    def assign_haul(self, world, items, stockpiles, src_tx, src_ty, dst_tx, dst_ty, kind, amount, cabinet=None):
+        adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+        if not adj: return False
+        p1 = astar(world, self.current_tile(), adj)
+        if not p1: return False
+        self._release_job()
+        self.path = p1
+        self.job = {"type": "haul", "src": (src_tx, src_ty), "dst": (dst_tx, dst_ty), "kind": kind, "amount": amount,
+                    "stage": "to_src", "cabinet": cabinet}
+        return True
+
     def assign_build(self, world, buildings, items, stockpiles, bp):
-        cur = self.current_tile()
+        if bp.reserved_by is not None and bp.reserved_by != self.id: return False
+        bp.reserved_by = self.id
 
         if bp.has_all_materials():
-            adj = self._find_adjacent_for_build(world, cur, bp)
-            if adj is None: return False
-            p = astar(world, cur, adj)
-            if p is None: return False
+            adj = self._find_adjacent_for_build(world, self.current_tile(), bp)
+            if not adj: return False
+            p = astar(world, self.current_tile(), adj)
+            if not p: return False
             self._release_job()
             self.path = p
             bp.reserved_by = self.id
@@ -288,48 +293,37 @@ class Colonist:
         else:
             missing = bp.missing_materials()
             need_kind = list(missing.keys())[0]
-
             if self.carrying and self.carrying["kind"] == need_kind:
-                adj = self._find_adjacent_for_build(world, cur, bp)
-                if adj is None: return False
-                p = astar(world, cur, adj)
-                if p is None: return False
+                adj = self._find_adjacent_for_build(world, self.current_tile(), bp)
+                if not adj: return False
+                p = astar(world, self.current_tile(), adj)
+                if not p: return False
                 self._release_job()
                 self.path = p
                 bp.reserved_by = self.id
                 self.job = {"type": "build", "bp": bp, "stage": "to_build"}
                 return True
-
             src = self._find_material_source(items, stockpiles, buildings, {need_kind: 1})
-            if src is None: return False
+            if not src: return False
             src_tx, src_ty, src_kind, cab = src
-
-            adj = self._find_adjacent(world, cur, src_tx, src_ty)
-            if adj is None:
-                if world.is_walkable(src_tx, src_ty):
-                    adj = (src_tx, src_ty)
-                else:
-                    return False
-            p = astar(world, cur, adj)
-            if p is None: return False
-
+            adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+            if not adj and world.is_walkable(src_tx, src_ty): adj = (src_tx, src_ty)
+            if not adj: return False
+            p = astar(world, self.current_tile(), adj)
+            if not p: return False
             self._release_job()
             self.path = p
             bp.reserved_by = self.id
-            self.job = {"type": "build", "bp": bp, "stage": "to_material",
-                        "mat_src": (src_tx, src_ty), "mat_kind": src_kind, "cabinet": cab}
+            self.job = {"type": "build", "bp": bp, "stage": "to_material", "mat_src": (src_tx, src_ty),
+                        "mat_kind": src_kind, "cabinet": cab}
             return True
 
     def assign_research(self, world, buildings, tx, ty, layer):
-        cur = self.current_tile()
-        adj = self._find_adjacent(world, cur, tx, ty)
-        if adj is None:
-            if world.is_walkable(tx, ty):
-                adj = (tx, ty)
-            else:
-                return False
-        p = astar(world, cur, adj)
-        if p is None: return False
+        adj = self._find_adjacent(world, self.current_tile(), tx, ty)
+        if not adj and world.is_walkable(tx, ty): adj = (tx, ty)
+        if not adj: return False
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
         self._release_job()
         self.path = p
         self.job = {"type": "research", "tx": tx, "ty": ty, "layer": layer}
@@ -343,203 +337,281 @@ class Colonist:
         return True
 
     def assign_cook(self, world, items, stockpiles, buildings, stove):
-        cur = self.current_tile()
+        if self.carrying and self.carrying["kind"] in ("meal_simple", "meal_fine"): return False
+        if not stove.cook_queue: return False
         task = stove.cook_queue[0]
         meal = task["meal"]
-
+        if not hasattr(stove, "delivered_ingredients"): stove.delivered_ingredients = {}
         need = []
         if meal == "meal_simple":
-            need = ["meat", "food"]
-        else:
-            need = ["meat", "food"]
+            if sum(stove.delivered_ingredients.values()) < 2: need = ["meat", "food"]
+        elif meal == "meal_fine":
+            if sum(stove.delivered_ingredients.values()) < 4:
+                if stove.delivered_ingredients.get("meat", 0) < 2: need.append("meat")
+                if stove.delivered_ingredients.get("food", 0) < 2: need.append("food")
 
-        src = self._find_food_ingredient(items, stockpiles, buildings, need)
-        if src:
-            src_tx, src_ty, src_kind, cab = src
-            adj = self._find_adjacent(world, cur, src_tx, src_ty)
+        if self.carrying and self.carrying["kind"] in need:
+            adj = self._find_adjacent(world, self.current_tile(), stove.tx, stove.ty)
             if adj:
-                p = astar(world, cur, adj)
+                p = astar(world, self.current_tile(), adj)
                 if p:
                     self._release_job()
                     self.path = p
-                    self.job = {"type": "cook", "stove": stove, "stage": "to_material",
-                                "mat_src": (src_tx, src_ty), "mat_kind": src_kind, "cabinet": cab}
+                    self.job = {"type": "cook", "stove": stove, "stage": "deliver"}
                     stove.reserved_by = self.id
-                    stove.cook_progress = 0.0
+                    return True
+        if need:
+            src = self._find_food_ingredient(items, stockpiles, buildings, need)
+            if src:
+                src_tx, src_ty, src_kind, cab = src
+                adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+                if adj:
+                    p = astar(world, self.current_tile(), adj)
+                    if p:
+                        self._release_job()
+                        self.path = p
+                        self.job = {"type": "cook", "stove": stove, "stage": "to_material", "mat_src": (src_tx, src_ty),
+                                    "mat_kind": src_kind, "cabinet": cab}
+                        stove.reserved_by = self.id
+                        return True
+        else:
+            adj = self._find_adjacent(world, self.current_tile(), stove.tx, stove.ty)
+            if adj:
+                p = astar(world, self.current_tile(), adj)
+                if p:
+                    self._release_job()
+                    self.path = p
+                    self.job = {"type": "cook", "stove": stove, "stage": "to_stove"}
+                    stove.reserved_by = self.id
                     return True
         return False
 
     def assign_farm(self, world, farm, tx, ty):
-        cur = self.current_tile()
-        adj = self._find_adjacent(world, cur, tx, ty)
-        if adj is None:
-            if world.is_walkable(tx, ty):
-                adj = (tx, ty)
-            else:
-                return False
-        p = astar(world, cur, adj)
-        if p is None: return False
+        adj = self._find_adjacent(world, self.current_tile(), tx, ty)
+        if not adj and world.is_walkable(tx, ty): adj = (tx, ty)
+        if not adj: return False
+        p = astar(world, self.current_tile(), adj)
+        if not p: return False
         self._release_job()
         self.path = p
         self.job = {"type": "farm", "tx": tx, "ty": ty, "farm": farm}
         self.work_progress = 0.0
         return True
 
+    def assign_craft(self, world, items, stockpiles, buildings, bench):
+        if not bench.craft_queue: return False
+        if bench.reserved_by is not None and bench.reserved_by != self.id: return False
+        task = bench.craft_queue[0]["item"]
+        need = {"iron": 5} if task == "gun" else (
+            {"iron": 3} if task == "longsword" else ({"stone": 2} if task == "stone_pickaxe" else {"iron": 2}))
+
+        for k, v in need.items():
+            if bench.delivered_materials.get(k, 0) < v:
+                if self.carrying and self.carrying["kind"] == k:
+                    adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p:
+                            self._release_job()
+                            self.path = p
+                            self.job = {"type": "craft", "bench": bench, "stage": "deliver"}
+                            bench.reserved_by = self.id
+                            return True
+                src = self._find_material_source(items, stockpiles, buildings, {k: 1})
+                if src:
+                    src_tx, src_ty, src_kind, cab = src
+                    adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p:
+                            self._release_job()
+                            self.path = p
+                            self.job = {"type": "craft", "bench": bench, "stage": "to_material",
+                                        "mat_src": (src_tx, src_ty), "mat_kind": src_kind, "cabinet": cab}
+                            bench.reserved_by = self.id
+                            return True
+                return False
+        adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
+        if adj:
+            p = astar(world, self.current_tile(), adj)
+            if p:
+                self._release_job()
+                self.path = p
+                self.job = {"type": "craft", "bench": bench, "stage": "to_bench"}
+                bench.reserved_by = self.id
+                return True
+        return False
+
+    def assign_smelt(self, world, items, stockpiles, buildings, furnace):
+        if not furnace.smelt_queue: return False
+        if furnace.reserved_by is not None and furnace.reserved_by != self.id: return False
+        if furnace.inventory.get("iron_ore", 0) >= 2:
+            adj = self._find_adjacent(world, self.current_tile(), furnace.tx, furnace.ty)
+            if adj:
+                p = astar(world, self.current_tile(), adj)
+                if p:
+                    self._release_job()
+                    self.path = p
+                    self.job = {"type": "smelt", "furnace": furnace}
+                    furnace.reserved_by = self.id
+                    return True
+        src = self._find_material_source(items, stockpiles, buildings, {"iron_ore": 2})
+        if src:
+            src_tx, src_ty, src_kind, cab = src
+            adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+            if adj:
+                p = astar(world, self.current_tile(), adj)
+                if p:
+                    self._release_job()
+                    self.path = p
+                    self.job = {"type": "smelt", "furnace": furnace, "stage": "to_material",
+                                "mat_src": (src_tx, src_ty), "cabinet": cab}
+                    furnace.reserved_by = self.id
+                    return True
+        return False
+
     def _find_adjacent(self, world, start, tx, ty):
-        candidates = self._find_adjacent_all(world, tx, ty)
-        if not candidates: return (tx, ty) if world.is_walkable(tx, ty) else None
-        best, best_d = None, None
-        for c in candidates:
-            d = abs(c[0] - start[0]) + abs(c[1] - start[1])
-            if best_d is None or d < best_d: best, best_d = c, d
-        return best
+        cands = self._find_adjacent_all(world, tx, ty)
+        if not cands: return (tx, ty) if world.is_walkable(tx, ty) else None
+        return min(cands, key=lambda c: abs(c[0] - start[0]) + abs(c[1] - start[1]))
 
     def _find_adjacent_all(self, world, tx, ty):
         return [(tx + dx, ty + dy) for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
                 if world.is_walkable(tx + dx, ty + dy)]
 
     def _find_adjacent_for_build(self, world, start, bp):
-        candidates = []
-        for dy in range(-1, bp.h + 1):
-            for dx in range(-1, bp.w + 1):
-                if 0 <= dx < bp.w and 0 <= dy < bp.h:
-                    continue
-                nx, ny = bp.tx + dx, bp.ty + dy
-                if world.is_walkable(nx, ny):
-                    candidates.append((nx, ny))
-
-        if not candidates: return None
-        best, best_d = None, None
-        for c in candidates:
-            d = abs(c[0] - start[0]) + abs(c[1] - start[1])
-            if best_d is None or d < best_d:
-                best, best_d = c, d
-        return best
+        cands = [(bp.tx + dx, bp.ty + dy) for dy in range(-1, bp.h + 1) for dx in range(-1, bp.w + 1) if
+                 not (0 <= dx < bp.w and 0 <= dy < bp.h) and world.is_walkable(bp.tx + dx, bp.ty + dy)]
+        if not cands: return None
+        return min(cands, key=lambda c: abs(c[0] - start[0]) + abs(c[1] - start[1]))
 
     def _push_out_of_wall(self, world):
         cx, cy = self.current_tile()
         if world.is_walkable(cx, cy): return
-
         self.path = []
-        self.state = None
-
         for r in range(1, 10):
             for dy in range(-r, r + 1):
                 for dx in range(-r, r + 1):
-                    tx, ty = cx + dx, cy + dy
-                    if world.is_walkable(tx, ty):
-                        self.x = tx * TILE_SIZE + TILE_SIZE / 2
-                        self.y = ty * TILE_SIZE + TILE_SIZE / 2
+                    if world.is_walkable(cx + dx, cy + dy):
+                        self.x, self.y = (cx + dx) * TILE_SIZE + TILE_SIZE / 2, (cy + dy) * TILE_SIZE + TILE_SIZE / 2
                         return
 
     def try_find_job(self, world, items, stockpiles, buildings, research, animals, farms):
         if self.is_busy(): return False
-
         job = buildings.find_deconstruct_job()
-        if job:
-            tx, ty, layer = job
-            if self.assign_deconstruct(world, buildings, tx, ty, layer): return True
-
+        if job and self.assign_deconstruct(world, buildings, *job): return True
         jobs = sorted(self.priorities.items(), key=lambda x: x[1])
         for job_type, priority in jobs:
             if priority == 0: continue
-            if job_type == "research" and research and research.current_research:
+
+            if job_type == "doctor":
+                for b in buildings.buildings.values():
+                    if b.kind == "medical_bed" and b.occupied_by is not None:
+                        patient = next((c for c in Colonist._all_colonists if c.id == b.occupied_by), None)
+                        if patient and patient.bleeding > 0:
+                            if self.assign_doctor(world, items, stockpiles, buildings, patient): return True
+
+            elif job_type == "research" and research and research.current_research:
                 r_job = buildings.find_research_job()
-                if r_job:
-                    tx, ty, layer = r_job
-                    if self.assign_research(world, buildings, tx, ty, layer): return True
+                if r_job and self.assign_research(world, buildings, *r_job): return True
             elif job_type == "hunt" and self.auto_hunt:
-                if animals:
-                    nearest = min(animals, key=lambda a: (a.x - self.x) ** 2 + (a.y - self.y) ** 2)
-                    self.assign_hunt(nearest)
-                    return True
+                if animals: self.assign_hunt(
+                    min(animals, key=lambda a: (a.x - self.x) ** 2 + (a.y - self.y) ** 2)); return True
             elif job_type == "farm":
                 for f in farms:
                     for pos, data in f.plots.items():
-                        if data["reserved_by"] is None:
-                            if not data["planted"] or data["growth"] >= 1.0:
-                                if self.assign_farm(world, f, pos[0], pos[1]):
-                                    data["reserved_by"] = self.id
-                                    return True
+                        if data["reserved_by"] is None and (not data["planted"] or data["growth"] >= 1.0):
+                            if self.assign_farm(world, f, pos[0], pos[1]): data["reserved_by"] = self.id; return True
             elif job_type == "cook":
                 for b in buildings.buildings.values():
-                    if b.kind == "stove" and not b.marked_for_deconstruction and b.reserved_by is None:
-                        if hasattr(b, 'cook_queue') and b.cook_queue:
-                            if self.assign_cook(world, items, stockpiles, buildings, b): return True
+                    if b.kind == "stove" and not b.marked_for_deconstruction and b.reserved_by is None and getattr(b,
+                                                                                                                   'cook_queue',
+                                                                                                                   None):
+                        if self.assign_cook(world, items, stockpiles, buildings, b): return True
+            elif job_type == "craft":
+                for b in buildings.buildings.values():
+                    if b.kind == "workbench" and not b.marked_for_deconstruction and b.reserved_by is None and getattr(
+                            b, 'craft_queue', None):
+                        if self.assign_craft(world, items, stockpiles, buildings, b): return True
+            elif job_type == "smelt":
+                for b in buildings.buildings.values():
+                    if b.kind == "furnace" and not b.marked_for_deconstruction and b.reserved_by is None and getattr(b,
+                                                                                                                     'smelt_queue',
+                                                                                                                     None):
+                        if self.assign_smelt(world, items, stockpiles, buildings, b): return True
             elif job_type == "harvest" and self.auto_harvest:
-                if self._try_harvest(world): return True
+                if self._try_harvest(world, buildings): return True
             elif job_type == "haul":
                 if self._try_haul(world, items, stockpiles, buildings): return True
             elif job_type == "build":
                 if self._try_build(world, buildings, items, stockpiles): return True
         return False
 
-    def _try_harvest(self, world):
+    def _try_harvest(self, world, buildings):
+        needed_kinds = set()
+        for bp in buildings.blueprints.values():
+            needed_kinds.update(bp.missing_materials().keys())
+
         best_pos, best_dist = None, 99999
         cur_x, cur_y = self.current_tile()
+        has_pickaxe = self.weapon_key in ("stone_pickaxe", "iron_pickaxe")
+
         for y in range(world.rows):
             for x in range(world.cols):
-                t = world.get(x, y)
-                if t in (T_ROCK, T_TREE, T_BERRY) and (x, y) not in Colonist._reserved_harvests:
+                tile = world.get(x, y)
+                if tile in (T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK) and (x, y) not in Colonist._reserved_harvests:
+                    if tile == T_IRON_ROCK and not has_pickaxe: continue
                     d = abs(x - cur_x) + abs(y - cur_y)
+                    drop = None
+                    if tile == T_ROCK:
+                        drop = "stone"
+                    elif tile == T_TREE:
+                        drop = "wood"
+                    elif tile == T_BERRY:
+                        drop = "food"
+                    elif tile == T_IRON_ROCK:
+                        drop = "iron_ore"
+                    if drop in needed_kinds: d -= 100000
                     if d < best_dist: best_dist, best_pos = d, (x, y)
-        if best_pos:
-            if self.assign_harvest(world, best_pos[0], best_pos[1]): return True
+        if best_pos and self.assign_harvest(world, best_pos[0], best_pos[1]): return True
         return False
 
     def _try_haul(self, world, items, stockpiles, buildings):
         if self.carrying: return False
-
         target_stacks = []
         for (tx, ty, kind), stack in list(items.stacks.items()):
-            if stack.amount <= 0 or stockpiles.find_stockpile_for(tx, ty) is not None: continue
-            if getattr(stack, "reserved_by", None) is not None: continue
+            if stack.amount <= 0 or stockpiles.find_stockpile_for(tx, ty) is not None or getattr(stack, "reserved_by",
+                                                                                                 None) is not None: continue
             target_stacks.append((tx, ty, kind, stack))
-
         target_stacks.sort(key=lambda x: 0 if x[2] in ("food", "meat", "meal_simple", "meal_fine") else 1)
-
         for (tx, ty, kind, stack) in target_stacks:
-            cabinet = None
-            take_amt = stack.amount
+            cabinet, take_amt = None, stack.amount
+            seen_b = set()
             for b in buildings.buildings.values():
+                if id(b) in seen_b: continue
+                seen_b.add(id(b))
                 if b.kind in ("small_cabinet",
                               "large_cabinet") and not b.marked_for_deconstruction and b.reserved_by is None:
-                    current_types = len(b.inventory.keys())
-                    if kind not in b.inventory and current_types >= b.max_types:
-                        continue
-                    cur_amt = b.inventory.get(kind, 0)
-                    space = b.capacity - cur_amt
-                    if space > 0:
-                        cabinet = b
-                        take_amt = min(stack.amount, space)
-                        break
-
+                    if kind not in b.inventory and len(b.inventory.keys()) >= b.max_types: continue
+                    space = b.capacity - b.inventory.get(kind, 0)
+                    if space > 0: cabinet = b; take_amt = min(stack.amount, space); break
             dst = (0, 0)
             if cabinet:
                 dst = (cabinet.tx, cabinet.ty)
             else:
                 sp_dst = self._find_dst_slot(items, stockpiles)
                 if not sp_dst: continue
-                dst = sp_dst
-                take_amt = stack.amount
-
+                dst, take_amt = sp_dst, stack.amount
             if self.assign_haul(world, items, stockpiles, tx, ty, dst[0], dst[1], kind, take_amt, cabinet):
                 if cabinet: cabinet.reserved_by = self.id
                 return True
         return False
 
     def _try_build(self, world, buildings, items, stockpiles):
-        unassigned_bps = set()
-        for bp in buildings.blueprints.values():
-            if bp.reserved_by is None:
-                unassigned_bps.add(bp)
-
+        unassigned_bps = set(bp for bp in buildings.blueprints.values() if bp.reserved_by is None)
         cur_x, cur_y = self.current_tile()
-        sorted_bps = sorted(list(unassigned_bps), key=lambda bp: abs(bp.tx - cur_x) + abs(bp.ty - cur_y))
-
-        for bp in sorted_bps:
-            if self.assign_build(world, buildings, items, stockpiles, bp):
-                return True
+        for bp in sorted(list(unassigned_bps), key=lambda bp: abs(bp.tx - cur_x) + abs(bp.ty - cur_y)):
+            if self.assign_build(world, buildings, items, stockpiles, bp): return True
         return False
 
     def _find_dst_slot(self, items, stockpiles):
@@ -558,20 +630,15 @@ class Colonist:
     def _pop_next_command(self):
         while self.queue:
             cmd = self.queue.pop(0)
-            t = cmd["type"]
-            if t == "move":
-                if self.move_to(cmd.get("world"), cmd["tx"], cmd["ty"]): return True
-            elif t == "harvest":
-                if self.assign_harvest(cmd["world"], cmd["tx"], cmd["ty"]): return True
-            elif t == "build":
-                if self.assign_build(cmd["world"], cmd["buildings"], cmd["items"], cmd["stockpiles"],
-                                     cmd["bp"]): return True
-            elif t == "attack":
-                self.assign_attack(cmd["enemy"])
-                return True
-            elif t == "hunt":
-                self.assign_hunt(cmd["animal"])
-                return True
+            if cmd["type"] == "move" and self.move_to(cmd.get("world"), cmd["tx"], cmd["ty"]): return True
+            elif cmd["type"] == "harvest" and self.assign_harvest(cmd["world"], cmd["tx"], cmd["ty"]): return True
+            elif cmd["type"] == "build" and self.assign_build(cmd["world"], cmd["buildings"], cmd["items"], cmd["stockpiles"], cmd["bp"]): return True
+            elif cmd["type"] == "attack": self.assign_attack(cmd["enemy"]); return True
+            elif cmd["type"] == "hunt": self.assign_hunt(cmd["animal"]); return True
+            elif cmd["type"] == "craft":
+                if self.assign_craft(cmd["world"], cmd["items"], cmd["stockpiles"], cmd["buildings"], cmd["bench"]): return True
+            elif cmd["type"] == "equip_from_ground": # <--- 新增这一行
+                if self.assign_equip_from_ground(cmd["world"], cmd["items"], cmd["tx"], cmd["ty"], cmd["kind"]): return True
         return False
 
     def update(self, dt, world=None, items=None, stockpiles=None, buildings=None, enemies=None, game_time=None,
@@ -579,9 +646,9 @@ class Colonist:
         self.cooldown_timer = max(0, self.cooldown_timer - dt)
         self.hit_flash = max(0, self.hit_flash - dt)
         if self.hp <= 0: return
+        if world: self._push_out_of_wall(world)
 
-        if world is not None:
-            self._push_out_of_wall(world)
+        if self.is_patient and self.state == "sleeping": return
 
         if self.target_enemy is not None:
             e = self.target_enemy
@@ -598,21 +665,18 @@ class Colonist:
                         if wdef["melee"]:
                             self.recent_shot = ("melee", self.x, self.y, e.x, e.y, wdef["color"])
                         else:
-                            muzzle_d = self.radius + 12
-                            mx = self.x + math.cos(self.facing_angle) * muzzle_d
-                            my = self.y + math.sin(self.facing_angle) * muzzle_d
+                            mx, my = self.x + math.cos(self.facing_angle) * (self.radius + 12), self.y + math.sin(
+                                self.facing_angle) * (self.radius + 12)
                             self.recent_shot = ("shot", mx, my, e.x, e.y, wdef["color"])
                         dead = e.take_damage(self.attack_damage, attacker=self)
                         self.cooldown_timer = self.attack_cooldown
                         if dead: self.target_enemy = None
                     return
-                else:
-                    if not self.path:
-                        t_tile = e.current_tile()
-                        adj = self._find_adjacent(world, self.current_tile(), *t_tile)
-                        if adj:
-                            p = astar(world, self.current_tile(), adj)
-                            if p is not None: self.path = p
+                elif not self.path:
+                    adj = self._find_adjacent(world, self.current_tile(), *e.current_tile())
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p is not None: self.path = p
 
         if self.target_animal is not None:
             a = self.target_animal
@@ -626,9 +690,8 @@ class Colonist:
                     self.path = []
                     if self.cooldown_timer <= 0:
                         wdef = self.get_weapon_def()
-                        muzzle_d = self.radius + 12
-                        mx = self.x + math.cos(self.facing_angle) * muzzle_d
-                        my = self.y + math.sin(self.facing_angle) * muzzle_d
+                        mx, my = self.x + math.cos(self.facing_angle) * (self.radius + 12), self.y + math.sin(
+                            self.facing_angle) * (self.radius + 12)
                         self.recent_shot = ("shot", mx, my, a.x, a.y, (255, 150, 100))
                         dead = a.take_damage(self.attack_damage, attacker=self)
                         self.cooldown_timer = self.attack_cooldown
@@ -636,21 +699,17 @@ class Colonist:
                             self.target_animal = None
                             if items:
                                 items.add(a.drop_item, a.drop_amount, *a.current_tile())
-                                if a.species == "deer":
-                                    items.add("leather", 3, *a.current_tile())
+                                if a.species == "deer": items.add("leather", 3, *a.current_tile())
                     return
-                else:
-                    if not self.path:
-                        t_tile = a.current_tile()
-                        adj = self._find_adjacent(world, self.current_tile(), *t_tile)
-                        if adj:
-                            p = astar(world, self.current_tile(), adj)
-                            if p is not None: self.path = p
+                elif not self.path:
+                    adj = self._find_adjacent(world, self.current_tile(), *a.current_tile())
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p is not None: self.path = p
 
         if self.path:
             target_tx, target_ty = self.path[0]
-            tgx = target_tx * TILE_SIZE + TILE_SIZE / 2
-            tgy = target_ty * TILE_SIZE + TILE_SIZE / 2
+            tgx, tgy = target_tx * TILE_SIZE + TILE_SIZE / 2, target_ty * TILE_SIZE + TILE_SIZE / 2
             dx, dy = tgx - self.x, tgy - self.y
             dist = (dx ** 2 + dy ** 2) ** 0.5
             step = self.speed * dt
@@ -678,8 +737,8 @@ class Colonist:
             if cab:
                 for k, amt in cab.inventory.items():
                     if k in ("meal_fine", "meal_simple", "food", "meat") and amt > 0:
-                        food_kind = k;
-                        cab.remove_item(k, 1);
+                        food_kind = k
+                        cab.remove_item(k, 1)
                         break
             else:
                 stacks = items.get_at(tx, ty) if items else []
@@ -690,20 +749,18 @@ class Colonist:
                     food_kind = food_stack.kind
                     food_stack.amount -= 1
                     if food_stack.amount <= 0: items.remove_at(tx, ty)
-
-            if not food_kind:
-                self.state = None
-                return
-            self.state = "eating"
-            self.state_timer = 0.8
+            if not food_kind: self.state = None; return
+            self.state, self.state_timer = "eating", 0.8
             if food_kind == "meal_fine":
-                self.satiety = min(100, self.satiety + 80);
+                self.satiety = min(100, self.satiety + 100);
                 self.mood = min(100, self.mood + 15)
             elif food_kind == "meal_simple":
                 self.satiety = min(100, self.satiety + 50);
                 self.mood = min(100, self.mood + 5)
+            elif food_kind == "meat":
+                self.satiety = min(100, self.satiety + 15)
             else:
-                self.satiety = min(100, self.satiety + 30)
+                self.satiety = min(100, self.satiety + 10)
             return
         if self.state == "going_to_sleep": self.state = "sleeping"
 
@@ -711,14 +768,128 @@ class Colonist:
         j = self.job
         jt = j["type"]
 
-        if jt == "harvest":
-            if not world.is_harvestable(j["tx"], j["ty"]):
+        if jt == "build" and j["bp"].reserved_by != self.id:
+            self._release_job()
+            return
+
+        if jt == "equip_from_ground":
+            if j["stage"] == "to_item":
+                if self.current_tile() == (j["tx"], j["ty"]) or self._find_adjacent(world, self.current_tile(), j["tx"],
+                                                                                    j["ty"]):
+                    # 检查物品是否还在地上
+                    found = False
+                    for s in items.get_at(j["tx"], j["ty"]):
+                        if s.kind == j["kind"]:
+                            s.amount -= 1
+                            if s.amount <= 0: items.remove_at(j["tx"], j["ty"])
+                            found = True
+                            break
+
+                    if found:
+                        # 强制装备，把手里旧的丢在地上
+                        if self.weapon_key != "fist":
+                            items.add(self.weapon_key, 1, *self.current_tile())
+                        self.equip_weapon(j["kind"])
+                    self._release_job()
+                else:
+                    self._release_job()
+            return
+
+        if jt == "doctor":
+            patient = j["patient"]
+            if j["stage"] == "to_patient":
+                if patient.hp <= 0 or patient.bleeding <= 0 or not patient.is_patient:
+                    self._release_job()
+                    return
+                if self.current_tile() == patient.current_tile() or self._find_adjacent(world, self.current_tile(),
+                                                                                        *patient.current_tile()):
+                    self.work_progress += self.work_speed * dt
+                    if self.work_progress >= 40.0:
+                        src = self._find_material_source(items, stockpiles, buildings, {"medicine": 1})
+                        if src:
+                            src_tx, src_ty, src_kind, cab = src
+                            if cab:
+                                cab.remove_item("medicine", 1)
+                            else:
+                                for s in items.get_at(src_tx, src_ty):
+                                    if s.kind == "medicine":
+                                        s.amount -= 1
+                                        if s.amount <= 0: items.remove_at(src_tx, src_ty)
+                                        break
+                            patient.hp = min(patient.max_hp, patient.hp + 30)
+                            patient.bleeding = 0.0
+                            patient.mood = min(100, patient.mood + 20)
+                            if patient.is_patient:
+                                patient._wake_up()
+                                patient.is_patient = False
+                        self._release_job()
+                else:
+                    self._release_job()
+
+        elif jt == "take_from_cabinet":
+            cabinet = j["cabinet"]
+            kind = j["kind"]
+            if cabinet.marked_for_deconstruction or cabinet.inventory.get(kind, 0) <= 0:
+                self._release_job()
+                return
+
+            if j["stage"] == "to_cabinet":
+                if self.current_tile() == (cabinet.tx, cabinet.ty) or self._find_adjacent(world, self.current_tile(),
+                                                                                          cabinet.tx, cabinet.ty):
+                    amount = cabinet.inventory.get(kind, 0)
+                    if cabinet.remove_item(kind, amount):
+                        if kind in ("axe", "stone_pickaxe", "iron_pickaxe", "longsword", "gun"):
+                            new_w = get_weapon(kind)
+                            curr_w = self.get_weapon_def()
+                            if new_w["damage"] > curr_w["damage"] or self.weapon_key == "fist":
+                                if self.weapon_key != "fist":
+                                    items.add(self.weapon_key, 1, *self.current_tile())
+                                self.equip_weapon(kind)
+                                self._release_job()
+                                return
+                        self.carrying = {"kind": kind, "amount": amount}
+                        j["stage"] = "storing"
+                        self._find_storage_target(world, items, stockpiles, buildings, j)
+                else:
+                    self._release_job()
+
+            elif j["stage"] == "storing":
+                if not self.carrying: self._release_job(); return
+                if j.get("target_kind") == "cabinet":
+                    b = j["target_obj"]
+                    if b and not b.marked_for_deconstruction:
+                        space = b.capacity - b.inventory.get(self.carrying["kind"], 0)
+                        put_amt = min(self.carrying["amount"], space)
+                        if put_amt > 0: b.add_item(self.carrying["kind"], put_amt); self.carrying["amount"] -= put_amt
+                        b.reserved_by = None
+                        if self.carrying and self.carrying["amount"] > 0: self._drop_food(items)
+                        self.carrying = None;
+                        self._release_job()
+                    else:
+                        if b: b.reserved_by = None
+                        self._find_storage_target(world, items, stockpiles, buildings, j)
+                elif j.get("target_kind") == "ground":
+                    tx, ty = j["target_pos"];
+                    items.add(self.carrying["kind"], self.carrying["amount"], tx, ty)
+                    self.carrying = None;
+                    self._release_job()
+                else:
+                    self._drop_food(items); self._release_job()
+
+        elif jt == "harvest":
+            if not world.is_harvestable(j["tx"], j["ty"]): self._release_job(); return
+            if world.get(j["tx"], j["ty"]) == T_IRON_ROCK and self.weapon_key not in ("stone_pickaxe", "iron_pickaxe"):
                 self._release_job()
                 return
             self.work_progress += self.work_speed * dt
             while self.work_progress >= 10.0:
                 self.work_progress -= 10.0
-                done, kind, amt = world.damage_resource(j["tx"], j["ty"], 10)
+                dmg = 10
+                wdef = self.get_weapon_def()
+                t = world.get(j["tx"], j["ty"])
+                if t == T_TREE and wdef.get("chop_bonus"): dmg *= 2.5
+                if t in (T_ROCK, T_IRON_ROCK) and wdef.get("mine_bonus"): dmg *= 2.5
+                done, kind, amt = world.damage_resource(j["tx"], j["ty"], int(dmg))
                 if done:
                     if items is not None and kind is not None: items.add(kind, amt, j["tx"], j["ty"])
                     self._release_job()
@@ -726,9 +897,7 @@ class Colonist:
         elif jt == "farm":
             farm = j["farm"]
             tx, ty = j["tx"], j["ty"]
-            if (tx, ty) not in farm.plots:
-                self._release_job()
-                return
+            if (tx, ty) not in farm.plots: self._release_job(); return
             data = farm.plots[(tx, ty)]
             if not data["planted"]:
                 self.work_progress += self.work_speed * dt
@@ -739,26 +908,19 @@ class Colonist:
             elif data["growth"] >= 1.0:
                 self.work_progress += self.work_speed * dt
                 if self.work_progress >= 20.0:
-                    if farm.plant_type == "berry":
-                        items.add("food", 3, tx, ty)
-                    else:
-                        items.add("wood", 5, tx, ty)
-                    data["planted"] = False
-                    data["growth"] = 0.0
+                    items.add("food" if farm.plant_type == "berry" else "wood", 3 if farm.plant_type == "berry" else 5,
+                              tx, ty)
+                    data["planted"], data["growth"] = False, 0.0
                     self._release_job()
         elif jt == "deconstruct":
             tx, ty, layer = j["tx"], j["ty"], j["layer"]
             b = buildings.get_building_at(tx, ty)
-            if not b or not b.marked_for_deconstruction:
-                self._release_job()
-                return
+            if not b or not b.marked_for_deconstruction: self._release_job(); return
             self.work_progress += self.work_speed * dt
             b.deconstruct_progress += self.work_speed * dt
             if b.deconstruct_progress >= b.deconstruct_needed:
-                cost = BUILDING_DEFS[b.kind]["variants"][b.material]["cost"]
-                for k, v in cost.items():
-                    refund = max(1, v // 2)
-                    items.add(k, refund, tx, ty)
+                for k, v in BUILDING_DEFS[b.kind]["variants"][b.material]["cost"].items():
+                    items.add(k, max(1, v // 2), tx, ty)
                 buildings.remove_building(tx, ty, layer)
                 self._release_job()
         elif jt == "research":
@@ -770,7 +932,7 @@ class Colonist:
 
         elif jt == "cook":
             stove = j["stove"]
-            if not stove.cook_queue or stove.marked_for_deconstruction:
+            if j["stage"] != "storing" and (not stove.cook_queue or stove.marked_for_deconstruction):
                 self._release_job()
                 return
 
@@ -780,130 +942,98 @@ class Colonist:
                     self.work_progress = 0.0
                     tx, ty = j["mat_src"]
                     kind = j["mat_kind"]
-
-                    found = False
-                    if j.get("cabinet"):
-                        found = j["cabinet"].remove_item(kind, 1)
-                    else:
+                    found = j["cabinet"].remove_item(kind, 1) if j.get("cabinet") else False
+                    if not j.get("cabinet"):
                         for s in items.get_at(tx, ty):
                             if s.kind == kind:
                                 s.amount -= 1
                                 if s.amount <= 0: items.remove_at(tx, ty)
                                 found = True
                                 break
-
-                    if not found:
-                        self._release_job()
+                    if not found: self._release_job(); return
+                    if not self.carrying:
+                        self.carrying = {"kind": kind, "amount": 1}
+                    elif self.carrying["kind"] == kind:
+                        self.carrying["amount"] += 1
+                    else:
+                        self._release_job();
                         return
-
-                    if "materials" not in j: j["materials"] = {}
-                    j["materials"][kind] = j["materials"].get(kind, 0) + 1
-
+                    adj = self._find_adjacent(world, self.current_tile(), stove.tx, stove.ty)
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p: self.path = p; j["stage"] = "deliver"; return
+                    self._release_job()
+            elif j["stage"] == "deliver":
+                if self.carrying and self.carrying["kind"] in ("meat", "food"):
+                    stove.delivered_ingredients[self.carrying["kind"]] = stove.delivered_ingredients.get(
+                        self.carrying["kind"], 0) + self.carrying["amount"]
+                    self.carrying = None
                     task = stove.cook_queue[0]
                     meal = task["meal"]
-
-                    got_enough = False
-                    if meal == "meal_simple":
-                        if len(j["materials"]) > 0: got_enough = True
-                    elif meal == "meal_fine":
-                        if j["materials"].get("meat", 0) >= 1 and j["materials"].get("food", 0) >= 1:
-                            got_enough = True
-
-                    if got_enough:
-                        adj = self._find_adjacent(world, self.current_tile(), stove.tx, stove.ty)
-                        if adj:
-                            p = astar(world, self.current_tile(), adj)
-                            if p:
-                                self.path = p
-                                j["stage"] = "to_stove"
-                                return
-                        self._release_job()
+                    is_enough = (meal == "meal_simple" and sum(stove.delivered_ingredients.values()) >= 2) or \
+                                (meal == "meal_fine" and sum(stove.delivered_ingredients.values()) >= 4)
+                    if is_enough:
+                        j["stage"] = "cooking"
+                        self.work_progress = 0.0
                     else:
+                        j["stage"] = "to_material"
                         need = ["meat", "food"]
                         if meal == "meal_fine":
-                            if j["materials"].get("meat", 0) > 0:
+                            if stove.delivered_ingredients.get("meat", 0) >= 2:
                                 need = ["food"]
-                            elif j["materials"].get("food", 0) > 0:
+                            elif stove.delivered_ingredients.get("food", 0) >= 2:
                                 need = ["meat"]
-
                         src = self._find_food_ingredient(items, stockpiles, buildings, need)
                         if src:
                             src_tx, src_ty, src_kind, cab = src
                             adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
                             if adj:
                                 p = astar(world, self.current_tile(), adj)
-                                if p:
-                                    self.path = p
-                                    j["mat_src"] = (src_tx, src_ty)
-                                    j["mat_kind"] = src_kind
-                                    j["cabinet"] = cab
-                                    return
+                                if p: self.path = p; j["mat_src"] = (src_tx, src_ty); j["mat_kind"] = src_kind; j[
+                                    "cabinet"] = cab; return
                         self._release_job()
-
-            elif j["stage"] == "to_stove":
-                self.work_progress += self.work_speed * dt * 2
-                if self.work_progress >= 10.0:
-                    self.work_progress = 0.0
-                    j["stage"] = "cooking"
-                    return
-
+                else:
+                    self._release_job()
             elif j["stage"] == "cooking":
-                # 核心修改：烹饪速度极大幅降低 (需要 100 进度)
                 self.work_progress += self.work_speed * dt
                 stove.cook_progress = self.work_progress
-
                 if self.work_progress >= 100.0:
-                    self.work_progress = 0.0
-                    stove.cook_progress = 0.0
                     task = stove.cook_queue.pop(0)
                     meal_kind = "meal_simple" if task["meal"] == "meal_simple" else "meal_fine"
+                    if task["meal"] == "meal_simple":
+                        cnt = 0
+                        for k in ["meat", "food"]:
+                            while stove.delivered_ingredients.get(k, 0) > 0 and cnt < 2:
+                                stove.delivered_ingredients[k] -= 1
+                                cnt += 1
+                            if cnt >= 2: break
+                    else:
+                        stove.delivered_ingredients["meat"] = max(0, stove.delivered_ingredients.get("meat", 0) - 2)
+                        stove.delivered_ingredients["food"] = max(0, stove.delivered_ingredients.get("food", 0) - 2)
 
                     if not self.carrying:
                         self.carrying = {"kind": meal_kind, "amount": 1}
                     elif self.carrying["kind"] == meal_kind:
                         self.carrying["amount"] += 1
-                    else:
-                        items.add(meal_kind, 1, stove.tx, stove.ty)
-
-                    if not stove.cook_queue or (self.carrying and self.carrying["amount"] >= self.carry_limit):
-                        j["stage"] = "storing"
-                        self._find_storage_target(world, items, stockpiles, buildings, j)
-                        return
-                    else:
-                        j["stage"] = "to_material"
-                        j["materials"] = {}
-                        need = ["meat", "food"]
-                        src = self._find_food_ingredient(items, stockpiles, buildings, need)
-                        if src:
-                            src_tx, src_ty, src_kind, cab = src
-                            adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
-                            if adj:
-                                p = astar(world, self.current_tile(), adj)
-                                if p:
-                                    self.path = p
-                                    j["mat_src"] = (src_tx, src_ty)
-                                    j["mat_kind"] = src_kind
-                                    j["cabinet"] = cab
-                                    return
-                        self._release_job()
-
+                    self.work_progress, stove.cook_progress = 0.0, 0.0
+                    j["stage"] = "storing"
+                    self._find_storage_target(world, items, stockpiles, buildings, j)
+                    return
             elif j["stage"] == "storing":
+                if not self.carrying: self._release_job(); return
                 if j.get("target_kind") == "cabinet":
                     b = j["target_obj"]
-                    if b:
+                    if b and not b.marked_for_deconstruction:
                         space = b.capacity - b.inventory.get(self.carrying["kind"], 0)
                         put_amt = min(self.carrying["amount"], space)
-                        if put_amt > 0:
-                            b.add_item(self.carrying["kind"], put_amt)
-                            self.carrying["amount"] -= put_amt
-
+                        if put_amt > 0: b.add_item(self.carrying["kind"], put_amt); self.carrying["amount"] -= put_amt
                         b.reserved_by = None
-
-                        if self.carrying and self.carrying["amount"] > 0:
-                            self._drop_food(items)
-
+                        if self.carrying and self.carrying["amount"] > 0: self._drop_food(items)
                         self.carrying = None
                         self._release_job()
+                    else:
+                        if b: b.reserved_by = None
+                        self._find_storage_target(world, items, stockpiles, buildings, j)
                 elif j.get("target_kind") == "ground":
                     tx, ty = j["target_pos"]
                     items.add(self.carrying["kind"], self.carrying["amount"], tx, ty)
@@ -913,136 +1043,289 @@ class Colonist:
                     self._drop_food(items)
                     self._release_job()
 
+        elif jt == "craft":
+            bench = j["bench"]
+            if not bench.craft_queue or bench.marked_for_deconstruction: self._release_job(); return
+            task = bench.craft_queue[0]["item"]
+            need = {"iron": 5} if task == "gun" else (
+                {"iron": 3} if task == "longsword" else ({"stone": 2} if task == "stone_pickaxe" else {"iron": 2}))
+
+            if j["stage"] == "to_material":
+                self.work_progress += self.work_speed * dt * 2
+                if self.work_progress >= 10.0:
+                    self.work_progress = 0.0
+                    tx, ty = j["mat_src"]
+                    kind = j["mat_kind"]
+                    found = j["cabinet"].remove_item(kind, 1) if j.get("cabinet") else False
+                    if not j.get("cabinet"):
+                        for s in items.get_at(tx, ty):
+                            if s.kind == kind:
+                                s.amount -= 1
+                                if s.amount <= 0: items.remove_at(tx, ty)
+                                found = True
+                                break
+                    if not found: self._release_job(); return
+                    if not self.carrying:
+                        self.carrying = {"kind": kind, "amount": 1}
+                    elif self.carrying["kind"] == kind:
+                        self.carrying["amount"] += 1
+                    adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p: self.path = p; j["stage"] = "deliver"; return
+                    self._release_job()
+            elif j["stage"] == "deliver":
+                if self.carrying:
+                    bench.delivered_materials[self.carrying["kind"]] = bench.delivered_materials.get(
+                        self.carrying["kind"], 0) + self.carrying["amount"]
+                    self.carrying = None
+                is_enough = all(bench.delivered_materials.get(k, 0) >= v for k, v in need.items())
+                if is_enough:
+                    for k, v in need.items(): bench.delivered_materials[k] -= v
+                    j["stage"] = "crafting"
+                    self.work_progress = 0.0
+                else:
+                    j["stage"] = "to_material"
+                    for k, v in need.items():
+                        if bench.delivered_materials.get(k, 0) < v:
+                            src = self._find_material_source(items, stockpiles, buildings, {k: 1})
+                            if src:
+                                src_tx, src_ty, src_kind, cab = src
+                                adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+                                if adj:
+                                    p = astar(world, self.current_tile(), adj)
+                                    if p: self.path = p; j["mat_src"] = (src_tx, src_ty); j["mat_kind"] = src_kind; j[
+                                        "cabinet"] = cab; return
+                            self._release_job()
+                            return
+            elif j["stage"] == "crafting":
+                self.work_progress += self.work_speed * dt
+                bench.craft_progress = self.work_progress
+                if self.work_progress >= 150.0:
+                    bench.craft_queue.pop(0)
+                    bench.craft_progress = 0.0
+                    self.work_progress = 0.0
+                    w_key = "axe" if task == "axe" else ("iron_pickaxe" if task == "iron_pickaxe" else (
+                        "stone_pickaxe" if task == "stone_pickaxe" else (
+                            "longsword" if task == "longsword" else "pistol")))
+
+                    new_w = get_weapon(w_key)
+                    curr_w = self.get_weapon_def()
+
+                    if new_w["damage"] > curr_w["damage"] or self.weapon_key == "fist":
+                        if self.weapon_key != "fist":
+                            items.add(self.weapon_key, 1, *self.current_tile())
+                        self.equip_weapon(w_key)
+                    else:
+                        items.add(w_key, 1, *self.current_tile())
+
+                    if not bench.craft_queue or bench.marked_for_deconstruction:
+                        self._release_job()
+                    else:
+                        j["stage"] = "to_material"
+                        j["materials"] = {}
+                        need = {"iron": 5} if bench.craft_queue[0]["item"] == "gun" else (
+                            {"iron": 3} if bench.craft_queue[0]["item"] == "longsword" else (
+                                {"stone": 2} if bench.craft_queue[0]["item"] == "stone_pickaxe" else {"iron": 2}))
+                        src = self._find_material_source(items, stockpiles, buildings, need)
+                        if src:
+                            src_tx, src_ty, src_kind, cab = src
+                            adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
+                            if adj:
+                                p = astar(world, self.current_tile(), adj)
+                                if p: self.path = p; j["mat_src"] = (src_tx, src_ty); j["mat_kind"] = src_kind; j[
+                                    "cabinet"] = cab; return
+                        self._release_job()
+            elif j["stage"] == "storing":
+                if not self.carrying: self._release_job(); return
+                if j.get("target_kind") == "cabinet":
+                    b = j["target_obj"]
+                    if b: b.add_item(self.carrying["kind"], self.carrying["amount"]); b.reserved_by = None
+                    self.carrying = None
+                    self._release_job()
+                else:
+                    self._drop_food(items)
+                    self._release_job()
+
+        elif jt == "smelt":
+            furnace = j["furnace"]
+            if not furnace.smelt_queue or furnace.marked_for_deconstruction: self._release_job(); return
+
+            if j["stage"] == "to_material":
+                self.work_progress += self.work_speed * dt * 2
+                if self.work_progress >= 10.0:
+                    self.work_progress = 0.0
+                    tx, ty = j["mat_src"]
+                    found = j["cabinet"].remove_item("iron_ore", 2) if j.get("cabinet") else False
+                    if not j.get("cabinet"):
+                        cnt = 0
+                        for s in items.get_at(tx, ty):
+                            if s.kind == "iron_ore" and cnt < 2:
+                                take = min(s.amount, 2 - cnt)
+                                s.amount -= take
+                                cnt += take
+                                if s.amount <= 0: items.remove_at(tx, ty)
+                        found = cnt > 0
+                    if not found: self._release_job(); return
+                    if not self.carrying: self.carrying = {"kind": "iron_ore", "amount": 2}
+                    adj = self._find_adjacent(world, self.current_tile(), furnace.tx, furnace.ty)
+                    if adj:
+                        p = astar(world, self.current_tile(), adj)
+                        if p: self.path = p; j["stage"] = "deliver"; return
+                    self._release_job()
+            elif j["stage"] == "deliver":
+                if self.carrying and self.carrying["kind"] == "iron_ore":
+                    furnace.inventory["iron_ore"] = furnace.inventory.get("iron_ore", 0) + self.carrying["amount"]
+                    self.carrying = None
+                if furnace.inventory.get("iron_ore", 0) >= 2:
+                    furnace.remove_item("iron_ore", 2)
+                    j["stage"] = "smelting"
+                    self.work_progress = 0.0
+                else:
+                    self._release_job()
+            elif j["stage"] == "smelting":
+                self.work_progress += self.work_speed * dt
+                furnace.smelt_progress = self.work_progress
+                if self.work_progress >= 150.0:
+                    furnace.smelt_queue.pop(0)
+                    furnace.smelt_progress = 0.0
+                    self.work_progress = 0.0
+                    if not self.carrying: self.carrying = {"kind": "iron", "amount": 2}
+                    j["stage"] = "storing"
+                    self._find_storage_target(world, items, stockpiles, buildings, j)
+
         elif jt == "haul":
-            stage = j["stage"]
-            if stage == "to_src":
+            if j["stage"] == "to_src":
                 self.work_progress += self.work_speed * dt * 2
                 if self.work_progress >= 10.0:
                     self.work_progress = 0.0
                     tx, ty = j["src"]
-                    want_amt = j["amount"]
 
-                    take_amt = 0
+                    if not self.carrying: self.carrying = {"kind": j["kind"], "amount": 0}
+
                     for s in items.get_at(tx, ty):
                         if s.kind == j["kind"]:
-                            take = min(s.amount, want_amt)
-                            s.amount -= take
-                            take_amt += take
-                            if s.amount <= 0: items.remove_at(tx, ty)
-                            if take_amt >= want_amt: break
+                            space = self.carry_limit - self.carrying["amount"]
+                            take = min(s.amount, space)
+                            if take > 0:
+                                s.amount -= take
+                                self.carrying["amount"] += take
+                                if s.amount <= 0: items.remove_at(tx, ty)
+                            if self.carrying["amount"] >= self.carry_limit: break
 
-                    if take_amt == 0:
+                    if self.carrying["amount"] == 0:
                         self._release_job()
                         return
 
-                    j["amount"] = take_amt
+                    if self.carrying["amount"] < self.carry_limit:
+                        best_next = None
+                        best_dist = 99999
+                        cur_tile = self.current_tile()
+                        for (ntx, nty, nkind), stack in items.stacks.items():
+                            if nkind == j["kind"] and stack.amount > 0 and getattr(stack, "reserved_by", None) is None:
+                                d = abs(ntx - cur_tile[0]) + abs(nty - cur_tile[1])
+                                if d < best_dist:
+                                    best_dist = d
+                                    best_next = (ntx, nty)
+
+                        if best_next:
+                            j["src"] = best_next
+                            stack = items.stacks[(best_next[0], best_next[1], j["kind"])]
+                            stack.reserved_by = self.id
+                            j["amount"] = min(stack.amount, self.carry_limit - self.carrying["amount"])
+                            path = astar(world, self.current_tile(),
+                                         self._find_adjacent(world, self.current_tile(), *best_next))
+                            if path:
+                                self.path = path
+                                return
 
                     cab = j.get("cabinet")
-                    if cab:
-                        path = astar(world, self.current_tile(),
-                                     self._find_adjacent(world, self.current_tile(), cab.tx, cab.ty))
-                    else:
-                        path = astar(world, self.current_tile(), j["dst"])
-
-                    if path is None:
-                        items.add(j["kind"], take_amt, tx, ty)
+                    path = astar(world, self.current_tile(),
+                                 self._find_adjacent(world, self.current_tile(), cab.tx, cab.ty)) if cab else astar(
+                        world, self.current_tile(), j["dst"])
+                    if not path:
+                        self._drop_food(items)
                         self._release_job()
                         return
                     self.path = path
                     j["stage"] = "to_dst"
-            elif stage == "to_dst":
+            elif j["stage"] == "to_dst":
                 self.work_progress += self.work_speed * dt * 2
                 if self.work_progress >= 10.0:
                     self.work_progress = 0.0
                     cab = j.get("cabinet")
                     if cab:
-                        cab.add_item(j["kind"], j["amount"])
+                        cab.add_item(j["kind"], self.carrying["amount"]);
                         cab.reserved_by = None
                     else:
-                        dx, dy = j["dst"]
-                        items.add(j["kind"], j["amount"], dx, dy)
+                        items.add(j["kind"], self.carrying["amount"], j["dst"][0], j["dst"][1])
+                    self.carrying = None
                     self._release_job()
         elif jt == "build":
             bp = j["bp"]
-            stage = j["stage"]
-            if stage == "to_material":
+            if j["stage"] == "to_material":
                 self.work_progress += self.work_speed * dt * 2
                 if self.work_progress >= 10.0:
                     self.work_progress = 0.0
                     tx, ty = j["mat_src"]
                     mat_kind = j["mat_kind"]
-
                     missing = bp.missing_materials().get(mat_kind, 0)
-                    if missing <= 0:
-                        self._release_job()
-                        return
-
+                    if missing <= 0: self._release_job(); return
                     target_take = min(missing, self.carry_limit)
-                    if self.carrying:
-                        target_take -= self.carrying["amount"]
-
-                    if target_take <= 0:
-                        self._release_job()
-                        return
-
+                    if self.carrying: target_take -= self.carrying["amount"]
+                    if target_take <= 0: self._release_job(); return
                     total_taken = 0
                     cab = j.get("cabinet")
                     if cab:
                         avail = cab.inventory.get(mat_kind, 0)
                         take = min(avail, target_take)
-                        if take > 0:
-                            cab.remove_item(mat_kind, take)
-                            total_taken = take
+                        if take > 0: cab.remove_item(mat_kind, take); total_taken = take
                     else:
-                        stacks = items.get_at(tx, ty)
-                        for s in stacks:
+                        for s in items.get_at(tx, ty):
                             if s.kind == mat_kind:
                                 take = min(s.amount, target_take - total_taken)
                                 s.amount -= take
                                 if s.amount <= 0: items.remove_at(tx, ty)
                                 total_taken += take
                                 if total_taken >= target_take: break
-
-                    if total_taken == 0:
-                        self._release_job()
-                        return
-
+                    if total_taken == 0: self._release_job(); return
                     if not self.carrying: self.carrying = {"kind": mat_kind, "amount": 0}
                     self.carrying["amount"] += total_taken
-
                     adj = self._find_adjacent_for_build(world, self.current_tile(), bp)
-                    if adj is None:
-                        self._release_job()
-                        return
+                    if not adj: self._release_job(); return
                     path = astar(world, self.current_tile(), adj)
-                    if path is None:
-                        self._release_job()
-                        return
+                    if not path: self._release_job(); return
                     self.path = path
                     j["stage"] = "to_build"
-            elif stage == "to_build":
+            elif j["stage"] == "to_build":
                 if self.carrying:
                     bp.delivered_materials[self.carrying["kind"]] = bp.delivered_materials.get(self.carrying["kind"],
                                                                                                0) + self.carrying[
                                                                         "amount"]
                     self.carrying = None
 
-                if bp.has_all_materials():
-                    if world.is_harvestable(bp.tx, bp.ty):
-                        self.work_progress += self.work_speed * dt
-                        while self.work_progress >= 10.0:
-                            self.work_progress -= 10.0
-                            done, kind, amt = world.damage_resource(bp.tx, bp.ty, 10)
-                            if done:
-                                if items is not None and kind is not None:
-                                    items.add(kind, amt, bp.tx, bp.ty)
-                                break
-                        return
+                if j.get("cleared") != True:
+                    all_clear = True
+                    for dy in range(bp.h):
+                        for dx in range(bp.w):
+                            if world.is_harvestable(bp.tx + dx, bp.ty + dy):
+                                all_clear = False
+                                self.work_progress += self.work_speed * dt
+                                while self.work_progress >= 10.0:
+                                    self.work_progress -= 10.0
+                                    done, kind, amt = world.damage_resource(bp.tx + dx, bp.ty + dy, 10)
+                                    if done:
+                                        if items is not None and kind is not None:
+                                            items.add(kind, amt, bp.tx + dx, bp.ty + dy)
+                                        break
+                                return
+                    if all_clear: j["cleared"] = True
 
+                if bp.has_all_materials():
                     self.work_progress += self.work_speed * dt
                     bp.work_done += self.work_speed * dt
                     if bp.is_complete():
-                        if buildings is not None: buildings.complete_blueprint(bp)
+                        buildings.complete_blueprint(bp)
                         self.carrying = None
                         self._release_job()
                         self._push_out_of_wall(world)
@@ -1055,36 +1338,34 @@ class Colonist:
                         adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
                         if adj:
                             p = astar(world, self.current_tile(), adj)
-                            if p:
-                                self.path = p
-                                j["stage"] = "to_material"
-                                j["mat_src"] = (src_tx, src_ty)
-                                j["mat_kind"] = src_kind
-                                j["cabinet"] = cab
-                                return
+                            if p: self.path = p; j["stage"] = "to_material"; j["mat_src"] = (src_tx, src_ty); j[
+                                "mat_kind"] = src_kind; j["cabinet"] = cab; return
                     self._release_job()
 
     def _find_storage_target(self, world, items, stockpiles, buildings, j):
         meal_kind = self.carrying["kind"]
-        meal_amt = self.carrying["amount"]
-
+        seen_b = set()
         for b in buildings.buildings.values():
-            if b.kind in ("small_cabinet", "large_cabinet") and not b.marked_for_deconstruction:
-                current_types = len(b.inventory.keys())
-                if meal_kind not in b.inventory and current_types >= b.max_types:
-                    continue
+            if id(b) in seen_b: continue
+            seen_b.add(id(b))
+            if b.kind in ("small_cabinet",
+                          "large_cabinet") and not b.marked_for_deconstruction and b.reserved_by is None:
+                if meal_kind not in b.inventory and len(b.inventory.keys()) >= b.max_types: continue
                 space = b.capacity - b.inventory.get(meal_kind, 0)
-                if space > 0 and b.reserved_by is None:
+                if space > 0:
                     adj = self._find_adjacent(world, self.current_tile(), b.tx, b.ty)
                     if adj:
                         p = astar(world, self.current_tile(), adj)
-                        if p:
-                            self.path = p
-                            b.reserved_by = self.id
-                            j["target_kind"] = "cabinet"
-                            j["target_obj"] = b
-                            return
-
+                        if p: self.path = p; b.reserved_by = self.id; j["target_kind"] = "cabinet"; j[
+                            "target_obj"] = b; return
+        sp_dst = self._find_dst_slot(items, stockpiles)
+        if sp_dst:
+            adj = self._find_adjacent(world, self.current_tile(), sp_dst[0], sp_dst[1])
+            if not adj and world.is_walkable(sp_dst[0], sp_dst[1]): adj = sp_dst
+            if adj:
+                if adj == self.current_tile(): j["target_kind"] = "ground"; j["target_pos"] = sp_dst; return
+                p = astar(world, self.current_tile(), adj)
+                if p is not None: self.path = p; j["target_kind"] = "ground"; j["target_pos"] = sp_dst; return
         self._drop_food(items)
 
     def _drop_food(self, items):
@@ -1093,41 +1374,29 @@ class Colonist:
             items.add(self.carrying["kind"], self.carrying["amount"], tx, ty)
             self.carrying = None
 
-    def _take_from(self, items, tx, ty):
-        if items is None: return None, 0
-        stacks = items.get_at(tx, ty)
-        if not stacks: return None, 0
-        s = stacks[0]
-        kind, amount = s.kind, s.amount
-        items.remove_at(tx, ty)
-        return kind, amount
-
     def _release_job(self):
         if self.job:
             if self.job.get("type") == "build":
                 bp = self.job.get("bp")
-                if bp is not None: bp.reserved_by = None
-            elif self.job.get("type") == "cook":
-                stove = self.job.get("stove")
-                if stove and stove.reserved_by == self.id: stove.reserved_by = None
-                if stove: stove.cook_progress = 0.0
+                if bp and bp.reserved_by == self.id: bp.reserved_by = None
+            elif self.job.get("type") in ("cook", "craft", "smelt"):
+                bldg_key = "stove" if self.job["type"] == "cook" else (
+                    "bench" if self.job["type"] == "craft" else "furnace")
+                bldg = self.job.get(bldg_key)
+                if bldg and bldg.reserved_by == self.id: bldg.reserved_by = None
+                if bldg and hasattr(bldg, "cook_progress"): bldg.cook_progress = 0.0
+                if bldg and hasattr(bldg, "craft_progress"): bldg.craft_progress = 0.0
                 if self.job.get("stage") == "storing":
                     b = self.job.get("target_obj")
                     if b and b.reserved_by == self.id: b.reserved_by = None
-                if self.carrying:
-                    self._drop_food(Colonist._items_ref)
             elif self.job.get("type") == "farm":
                 farm = self.job.get("farm")
                 tx, ty = self.job["tx"], self.job["ty"]
-                if farm and (tx, ty) in farm.plots:
-                    farm.plots[(tx, ty)]["reserved_by"] = None
+                if farm and (tx, ty) in farm.plots: farm.plots[(tx, ty)]["reserved_by"] = None
             elif self.job.get("type") == "harvest":
                 tx, ty = self.job.get("tx"), self.job.get("ty")
                 if (tx, ty) in Colonist._reserved_harvests: Colonist._reserved_harvests.remove((tx, ty))
             elif self.job.get("type") == "haul":
-                key = self.job.get("reserved_stack_key")
-                if key and Colonist._items_ref and key in Colonist._items_ref.stacks: Colonist._items_ref.stacks[
-                    key].reserved_by = None
                 cab = self.job.get("cabinet")
                 if cab: cab.reserved_by = None
             elif self.job.get("type") == "research":
@@ -1135,42 +1404,39 @@ class Colonist:
                 if Colonist._buildings_ref:
                     b = Colonist._buildings_ref.get_building_at(tx, ty)
                     if b and b.reserved_by == self.id: b.reserved_by = None
-        self.job = None
-        self.work_progress = 0.0
-        self.path = []
+        self.job, self.work_progress, self.path = None, 0.0, []
+
+        if self.carrying:
+            self._drop_food(Colonist._items_ref)
+
+        if self.state in ("going_to_eat", "going_to_sleep"):
+            self.state = None
 
     def draw(self, surface, camera, font):
         if self.hp <= 0: return
         sx, sy = camera.world_to_screen(self.x, self.y)
         if self.selected: pygame.draw.circle(surface, SELECT, (int(sx), int(sy)), self.radius + 6, 2)
-        wdef = self.get_weapon_def()
-        draw_weapon(surface, sx, sy, self.facing_angle, wdef, 1.0)
-        body_color = (255, 200, 100) if self.hit_flash > 0 else self.color
-        pygame.draw.circle(surface, body_color, (int(sx), int(sy)), self.radius)
+        draw_weapon(surface, sx, sy, self.facing_angle, self.get_weapon_def(), 1.0)
+        pygame.draw.circle(surface, (255, 200, 100) if self.hit_flash > 0 else self.color, (int(sx), int(sy)),
+                           self.radius)
         pygame.draw.circle(surface, (0, 0, 0), (int(sx), int(sy)), self.radius, 2)
-        bw, bh = self.radius * 2, 4
-        hx, hy = int(sx - self.radius), int(sy - self.radius - 10)
-        pygame.draw.rect(surface, (60, 0, 0), (hx, hy, bw, bh))
-        pygame.draw.rect(surface, (60, 200, 60), (hx, hy, int(bw * self.hp / self.max_hp), bh))
-
-        name_surf = font.render(self.name, True, WHITE)
-        surface.blit(name_surf, (sx - name_surf.get_width() / 2, sy + self.radius + 2))
+        pygame.draw.rect(surface, (60, 0, 0), (int(sx - self.radius), int(sy - self.radius - 10), self.radius * 2, 4))
+        pygame.draw.rect(surface, (60, 200, 60), (int(sx - self.radius), int(sy - self.radius - 10),
+                                                  int((self.radius * 2) * (self.hp / self.max_hp)), 4))
+        surface.blit(font.render(self.name, True, WHITE), (sx - font.size(self.name)[0] / 2, sy + self.radius + 2))
 
         if self.carrying:
             c_kind = self.carrying["kind"]
             c_color = ITEM_DEFS.get(c_kind, {"color": (200, 200, 200)})["color"]
-            rect = pygame.Rect(sx + self.radius, sy - self.radius - 6, 14, 14)
-            pygame.draw.rect(surface, c_color, rect)
-            pygame.draw.rect(surface, (0, 0, 0), rect, 1)
-
-            txt = font.render(str(self.carrying["amount"]), True, WHITE)
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                surface.blit(font.render(str(self.carrying["amount"]), True, (0, 0, 0)),
-                             (sx + self.radius + 16 + dx, sy - self.radius - 10 + dy))
-            surface.blit(txt, (sx + self.radius + 16, sy - self.radius - 10))
+            pygame.draw.rect(surface, c_color, (sx + self.radius, sy - self.radius - 6, 14, 14))
+            pygame.draw.rect(surface, (0, 0, 0), (sx + self.radius, sy - self.radius - 6, 14, 14), 1)
+            surface.blit(font.render(str(self.carrying["amount"]), True, WHITE),
+                         (sx + self.radius + 16, sy - self.radius - 10))
 
         label, color = None, (200, 200, 200)
-        if self.state == "sleeping":
+        if self.is_patient:
+            label, color = "病患", (255, 100, 100)
+        elif self.state == "sleeping":
             label, color = "Zzz...", (180, 200, 255)
         elif self.state == "eating":
             label, color = "吃饭", (255, 220, 120)
@@ -1182,83 +1448,21 @@ class Colonist:
             label, color = "狩猎", (255, 150, 100)
         elif self.job:
             labels = {"harvest": "采集", "haul": "搬运", "build": "建造", "deconstruct": "拆除", "research": "研究",
-                      "cook": "烹饪", "farm": "农业"}
+                      "cook": "烹饪", "farm": "农业", "craft": "制作", "smelt": "熔炼", "doctor": "医疗",
+                      "take_from_cabinet": "取物"}
             label, color = labels.get(self.job["type"], "工作"), (255, 220, 100)
-        elif self.queue:
-            label, color = f"待命({len(self.queue)})", (150, 200, 255)
-        if label:
-            job_surf = font.render(label, True, color)
-            surface.blit(job_surf, (sx - job_surf.get_width() / 2, sy + self.radius + 20))
+        if label: surface.blit(font.render(label, True, color), (sx - font.size(label)[0] / 2, sy + self.radius + 20))
         if self.state == "sleeping":
-            for off in [(20, -20), (28, -32), (36, -44)]:
-                surface.blit(font.render("Z", True, (200, 220, 255)), (sx + off[0], sy + off[1]))
+            for off in [(20, -20), (28, -32), (36, -44)]: surface.blit(font.render("Z", True, (200, 220, 255)),
+                                                                       (sx + off[0], sy + off[1]))
 
     def draw_path(self, surface, camera, world):
         if not self.path and not self.queue and self.target_enemy is None and self.target_animal is None: return
-
-        current_color = (255, 255, 80)
-        if self.target_enemy is not None or self.target_animal is not None:
-            current_color = (255, 80, 80)
-        elif self.job:
-            if self.job["type"] == "move":
-                current_color = (255, 255, 80)
-            else:
-                current_color = (80, 255, 80)
-
-        last_pt = (self.x, self.y)
-        last_tile = self.current_tile()
-
+        current_color = (255, 80, 80) if (self.target_enemy or self.target_animal) else (
+            (255, 255, 80) if (self.job and self.job["type"] == "move") else (80, 255, 80))
+        last_pt, last_tile = (self.x, self.y), self.current_tile()
         if self.path:
             pts = [last_pt] + [(tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2) for tx, ty in self.path]
             screen_pts = [camera.world_to_screen(x, y) for (x, y) in pts]
-            if len(screen_pts) >= 2:
-                pygame.draw.lines(surface, current_color, False, screen_pts, 2)
-            last_pt = pts[-1]
-            last_tile = self.path[-1]
-
-        if self.queue:
-            for i, cmd in enumerate(self.queue):
-                cmd_color = (255, 255, 80)
-                if cmd["type"] == "attack":
-                    cmd_color = (255, 80, 80)
-                    if cmd["enemy"].hp > 0:
-                        target_tx, target_ty = cmd["enemy"].current_tile()
-                    else:
-                        continue
-                elif cmd["type"] == "hunt":
-                    cmd_color = (255, 80, 80)
-                    if cmd["animal"].hp > 0:
-                        target_tx, target_ty = cmd["animal"].current_tile()
-                    else:
-                        continue
-                elif cmd["type"] == "build":
-                    cmd_color = (80, 255, 80)
-                    bp = cmd.get("bp")
-                    if bp:
-                        target_tx, target_ty = bp.tx, bp.ty
-                    else:
-                        continue
-                elif cmd["type"] in ("harvest", "deconstruct"):
-                    cmd_color = (80, 255, 80)
-                    target_tx, target_ty = cmd["tx"], cmd["ty"]
-                else:
-                    target_tx, target_ty = cmd["tx"], cmd["ty"]
-
-                if i < 3:
-                    p = astar(world, last_tile, (target_tx, target_ty))
-                    if p:
-                        pts = [(last_pt[0], last_pt[1])] + [
-                            (tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2) for tx, ty in p]
-                        screen_pts = [camera.world_to_screen(x, y) for (x, y) in pts]
-                        if len(screen_pts) >= 2:
-                            pygame.draw.lines(surface, cmd_color, False, screen_pts, 2)
-                        last_pt = pts[-1]
-                        last_tile = p[-1]
-                    else:
-                        sx, sy = camera.world_to_screen(target_tx * TILE_SIZE + TILE_SIZE / 2,
-                                                        target_ty * TILE_SIZE + TILE_SIZE / 2)
-                        pygame.draw.circle(surface, cmd_color, (int(sx), int(sy)), 5, 2)
-                else:
-                    sx, sy = camera.world_to_screen(target_tx * TILE_SIZE + TILE_SIZE / 2,
-                                                    target_ty * TILE_SIZE + TILE_SIZE / 2)
-                    pygame.draw.circle(surface, cmd_color, (int(sx), int(sy)), 5, 2)
+            if len(screen_pts) >= 2: pygame.draw.lines(surface, current_color, False, screen_pts, 2)
+            last_pt, last_tile = pts[-1], self.path[-1]

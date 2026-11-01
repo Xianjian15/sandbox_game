@@ -1,23 +1,12 @@
 # systems/research.py
 TECHS = {
-    "stone_masonry": {
-        "name": "石工技术", "cost": 100.0, "desc": "解锁石墙、石门、石窗、石地板。",
-        "requires": [], "unlocks": ["stone_material"]
-    },
-    "agriculture": {
-        "name": "基础农业", "cost": 80.0, "desc": "解锁农业种植区，可以种植浆果。",
-        "requires": [], "unlocks": ["plant_berry"]
-    },
-    "fast_trees": {
-        "name": "速生树种", "cost": 150.0, "desc": "解锁在农业区种植树木。",
-        "requires": ["agriculture"], "unlocks": ["plant_tree"]
-    },
-    "better_berries": {
-        "name": "改良浆果", "cost": 200.0, "desc": "种植的浆果不仅产量更高，还能提供更多饱食度。",
-        "requires": ["agriculture"], "unlocks": []
-    }
+    "stone_masonry": {"name": "石工技术", "cost": 100.0, "desc": "解锁石墙、门、窗、地板、石镐，以及工作台。", "requires": [], "unlocks": ["stone_material", "workbench"]},
+    "agriculture": {"name": "基础农业", "cost": 80.0, "desc": "解锁农业种植区，可以种植浆果。", "requires": [], "unlocks": ["plant_berry"]},
+    "herbal_medicine": {"name": "草药学", "cost": 120.0, "desc": "解锁医疗床，以及种植草药。", "requires": ["agriculture"], "unlocks": ["medical_bed", "plant_medicine"]},
+    "smelting": {"name": "粗铁精炼", "cost": 200.0, "desc": "解锁熔炉，可以将粗铁精炼为铁。", "requires": ["stone_masonry"], "unlocks": ["furnace"]},
+    "crafting": {"name": "基础锻造", "cost": 250.0, "desc": "解锁铁斧、铁镐、长剑的制作。", "requires": ["smelting"], "unlocks": ["iron_gear"]},
+    "gunsmithing": {"name": "枪械制造", "cost": 400.0, "desc": "解锁枪械制作。", "requires": ["crafting"], "unlocks": ["guns"]}
 }
-
 
 class ResearchManager:
     def __init__(self):
@@ -44,11 +33,15 @@ class ResearchManager:
         return False
 
     def is_unlocked(self, kind, material=None):
-        if kind == "floor" and material == "stone": return "stone_masonry" in self.completed
-        if kind in ("wall", "door", "window") and material == "stone": return "stone_masonry" in self.completed
+        if kind in ("furnace",) and "smelting" not in self.completed: return False
+        if kind in ("workbench",) and "stone_masonry" not in self.completed: return False
+        if kind in ("medical_bed",) and "herbal_medicine" not in self.completed: return False
+        if kind == "floor" and material == "stone" and "stone_masonry" not in self.completed: return False
+        if kind in ("wall", "door", "window") and material == "stone" and "stone_masonry" not in self.completed: return False
         return True
 
     def can_plant(self, plant_type):
         if plant_type == "berry": return "agriculture" in self.completed
         if plant_type == "tree": return "fast_trees" in self.completed
+        if plant_type == "medicine": return "herbal_medicine" in self.completed
         return False
