@@ -7,10 +7,10 @@ from combat.weapons import get_weapon
 class HUD:
     def __init__(self, font):
         self.font = font
-        self.panel_rect = pygame.Rect(10, 60, 320, 440)  # 保持拉长面板
+        self.panel_rect = pygame.Rect(10, 60, 320, 440)
         self.rects = {}
 
-    def draw(self, surface, colonists, selected_colonists, camera, auto_work_global):
+    def draw(self, surface, colonists, selected_colonists, camera):
         if not selected_colonists: return
 
         c = selected_colonists[0]
@@ -21,7 +21,6 @@ class HUD:
         surface.blit(panel, (x, y))
         pygame.draw.rect(surface, (100, 100, 110), self.panel_rect, 2)
 
-        # 顶部：姓名
         title = f"{c.name}"
         surface.blit(self.font.render(title, True, (255, 220, 100)), (x + 10, y + 10))
 
@@ -29,7 +28,6 @@ class HUD:
             surface.blit(self.font.render(f"等 {len(selected_colonists)} 人", True, (150, 200, 255)), (x + 10, y + 35))
             y += 20
 
-        # 需求条
         self._draw_bar(surface, x + 10, y + 40, 120, "饱食", c.satiety, (200, 180, 80))
         self._draw_bar(surface, x + 10, y + 65, 120, "精力", c.rest, (80, 150, 200))
         self._draw_bar(surface, x + 170, y + 40, 120, "心情", c.mood, (150, 200, 100))
@@ -37,7 +35,6 @@ class HUD:
         if getattr(c, "bleeding", 0) > 0:
             surface.blit(self.font.render(f"流血: {c.bleeding:.1f}/s", True, (255, 80, 80)), (x + 170, y + 65))
 
-        # 工作优先级标题
         surface.blit(self.font.render("工作优先级 (点击调整):", True, (200, 200, 100)), (x + 10, y + 100))
 
         self.rects.clear()
@@ -55,7 +52,6 @@ class HUD:
             by = y + 125 + line * 30
 
             prio = c.priorities.get(job_key, 0)
-            # 颜色：0灰，1深绿(高)，2浅绿，3黄，4红(低)
             if prio == 0:
                 color = (120, 120, 120)
             elif prio == 1:
@@ -73,26 +69,15 @@ class HUD:
             self.rects[(bx - 5, by - 2, 90, 24)] = (job_key, selected_colonists)
             row += 1
 
-        # 状态开关
-        y_stat = y + 245
-        aw_text = f"全局自动工作: {'开' if auto_work_global else '关'}"
-        ah_text = f"小人自动采集: {'开' if c.auto_harvest else '关'}"
-        surface.blit(self.font.render(aw_text, True, (150, 200, 255) if auto_work_global else (200, 100, 100)),
-                     (x + 10, y_stat))
-        surface.blit(self.font.render(ah_text, True, (150, 200, 255) if c.auto_harvest else (200, 100, 100)),
-                     (x + 10, y_stat + 20))
-
-        # 【修改】装备栏移到这里，在自动采集下面
+        # 装备栏
         weapon = get_weapon(c.weapon_key)
-        wy = y_stat + 50
+        wy = y + 260
         surface.blit(self.font.render("当前装备:", True, (200, 200, 200)), (x + 10, wy))
 
-        # 装备槽背景
         wx, ww, wh = x + 80, 220, 26
         pygame.draw.rect(surface, (40, 50, 40), (wx, wy - 2, ww, wh), border_radius=4)
         pygame.draw.rect(surface, (100, 150, 100), (wx, wy - 2, ww, wh), 1, border_radius=4)
 
-        # 武器名称和伤害
         surface.blit(self.font.render(f"{weapon['name']}", True, (200, 255, 200)), (wx + 10, wy + 2))
         surface.blit(self.font.render(f"伤害: {weapon['damage']}", True, (150, 200, 150)), (wx + 120, wy + 2))
 

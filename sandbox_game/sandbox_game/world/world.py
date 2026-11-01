@@ -40,11 +40,11 @@ class World:
                         self.tiles[y][x] = t
 
         # 生成铁矿脉
-        for _ in range(25):
+        for _ in range(8):
             cx, cy = random.randint(0, self.cols - 1), random.randint(0, self.rows - 1)
-            for y in range(max(0, cy - 2), min(self.rows, cy + 3)):
-                for x in range(max(0, cx - 2), min(self.cols, cx + 3)):
-                    if (x - cx) ** 2 + (y - cy) ** 2 <= 5 and random.random() < 0.8:
+            for y in range(max(0, cy - 1), min(self.rows, cy + 2)):  # 范围从 5 改成了 3x3 的区域
+                for x in range(max(0, cx - 1), min(self.cols, cx + 2)):
+                    if (x - cx) ** 2 + (y - cy) ** 2 <= 2 and random.random() < 0.7:  # 密集度略微降低
                         self.tiles[y][x] = T_IRON_ROCK
 
         # 河流

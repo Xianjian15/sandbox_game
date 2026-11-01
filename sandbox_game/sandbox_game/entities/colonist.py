@@ -15,7 +15,9 @@ DEFAULT_PRIORITIES = {"harvest": 2, "haul": 3, "build": 3, "research": 1, "hunt"
 
 
 class Colonist:
-    _id_counter, _reserved_harvests = 0, set()
+    _id_counter = 0
+    _reserved_harvests = set()
+    _designated_harvests = set()  # 玩家框选的指定采集区
     _items_ref, _buildings_ref, _room_mgr_ref, _all_colonists = None, None, None, []
 
     def __init__(self, tx, ty, name=None, weapon_key="fist"):
@@ -31,7 +33,6 @@ class Colonist:
         self.path, self.selected, self.job = [], False, None
         self.work_progress = 0.0
         self.priorities = dict(DEFAULT_PRIORITIES)
-        self.auto_harvest, self.auto_hunt = False, False
         self.carry_limit, self.carrying = 20, None
         self.satiety, self.rest, self.mood = 100.0, 100.0, 100.0
 
@@ -47,13 +48,20 @@ class Colonist:
         self.hit_flash, self.auto_retaliate, self.recent_shot = 0.0, True, None
         self.facing_angle, self.queue = 0.0, []
 
-        # 防卡死计时器
         self.stuck_timer = 0.0
         self.last_pos = (self.x, self.y)
         self.last_prog = self.work_progress
 
         rng = random.Random(self.id * 777)
         self.color = (rng.randint(80, 220), rng.randint(80, 220), rng.randint(80, 220))
+
+        # 建造锁：防止 haul 任务抢走正在建造的蓝图材料
+        self.build_lock = None
+        self.build_lock_timer = 0.0
+
+        # 战斗锁：玩家指定攻击目标后，直到目标死亡或超时才解锁
+        self.combat_lock = None
+        self.combat_lock_timer = 0.0
 
     def get_weapon_def(self):
         return get_weapon(self.weapon_key)
@@ -81,7 +89,9 @@ class Colonist:
         self.hit_flash = 0.15
         self.bleeding += amount * 0.05
         if self.state == "sleeping": self._wake_up()
-        if attacker is not None and self.auto_retaliate and self.target_enemy is None: self.target_enemy = attacker
+        # 自动反击只在没有 combat_lock 时才劫持目标
+        if attacker is not None and self.auto_retaliate and self.target_enemy is None and self.combat_lock is None:
+            self.target_enemy = attacker
         return self.hp <= 0
 
     def update_needs(self, dt, game_time):
@@ -141,7 +151,10 @@ class Colonist:
             self.work_speed = self.base_work_speed
 
     def check_urgent_needs(self, world, items, stockpiles, buildings):
-        if self.target_enemy is not None or self.hp <= 0 or self.state is not None or self.is_patient: return False
+        # 战斗锁期间不被打断
+        if (self.target_enemy is not None or self.combat_lock is not None or self.hp <= 0
+                or self.state is not None or self.is_patient):
+            return False
 
         if self.hp < 40 and self.bleeding > 0:
             bed = buildings.find_free_medical_bed(self.id)
@@ -230,7 +243,7 @@ class Colonist:
         self.job = {"type": "doctor", "patient": patient, "stage": "to_patient"}
         return True
 
-    def assign_take_from_cabinet(self, world, items, stockpiles, buildings, cabinet, kind):
+    def assign_take_from_cabinet(self, world, items, stockpiles, buildings, cabinet, kind, amount):
         if cabinet.inventory.get(kind, 0) <= 0: return False
         adj = self._find_adjacent(world, self.current_tile(), cabinet.tx, cabinet.ty)
         if not adj: return False
@@ -238,7 +251,7 @@ class Colonist:
         if not p: return False
         self._release_job()
         self.path = p
-        self.job = {"type": "take_from_cabinet", "cabinet": cabinet, "kind": kind, "stage": "to_cabinet"}
+        self.job = {"type": "take_from_cabinet", "cabinet": cabinet, "kind": kind, "amount": amount, "stage": "to_cabinet"}
         return True
 
     def assign_equip_from_ground(self, world, items, tx, ty, kind):
@@ -346,7 +359,6 @@ class Colonist:
 
     def assign_build(self, world, buildings, items, stockpiles, bp):
         if bp.reserved_by is not None and bp.reserved_by != self.id: return False
-        bp.reserved_by = self.id
 
         if bp.has_all_materials():
             adj = self._find_adjacent_for_build(world, self.current_tile(), bp)
@@ -361,6 +373,7 @@ class Colonist:
         else:
             missing = bp.missing_materials()
             need_kind = list(missing.keys())[0]
+
             if self.carrying and self.carrying["kind"] == need_kind:
                 adj = self._find_adjacent_for_build(world, self.current_tile(), bp)
                 if not adj: return False
@@ -371,6 +384,7 @@ class Colonist:
                 bp.reserved_by = self.id
                 self.job = {"type": "build", "bp": bp, "stage": "to_build"}
                 return True
+
             src = self._find_material_source(items, stockpiles, buildings, {need_kind: 1})
             if not src: return False
             src_tx, src_ty, src_kind, cab = src
@@ -565,7 +579,28 @@ class Colonist:
                         return
 
     def try_find_job(self, world, items, stockpiles, buildings, research, animals, farms):
+        # 战斗锁优先：只要有目标，就一直追着打，不接其他任务
+        if self.combat_lock is not None:
+            if self.combat_lock.hp > 0:
+                self.target_enemy = self.combat_lock
+                return False
+            else:
+                self.combat_lock = None
+                self.combat_lock_timer = 0.0
+
         if self.is_busy(): return False
+
+        # 防死锁：手里有东西却不干活，直接丢地上
+        if self.carrying:
+            self._drop_food(items)
+            return False
+
+        # 有建造锁时优先继续建造，避免被搬运任务拆台
+        if self.build_lock is not None:
+            if self._try_build(world, buildings, items, stockpiles):
+                return True
+            # 失败也保留锁，让后续 harvest 去补料；超时机制兜底
+
         job = buildings.find_deconstruct_job()
         if job and self.assign_deconstruct(world, buildings, *job): return True
         jobs = sorted(self.priorities.items(), key=lambda x: x[1])
@@ -582,9 +617,11 @@ class Colonist:
             elif job_type == "research" and research and research.current_research:
                 r_job = buildings.find_research_job()
                 if r_job and self.assign_research(world, buildings, *r_job): return True
-            elif job_type == "hunt" and self.auto_hunt:
-                if animals: self.assign_hunt(
-                    min(animals, key=lambda a: (a.x - self.x) ** 2 + (a.y - self.y) ** 2)); return True
+            elif job_type == "hunt":
+                hunted_animals = [a for a in animals if getattr(a, "is_hunted", False)]
+                if hunted_animals:
+                    self.assign_hunt(min(hunted_animals, key=lambda a: (a.x - self.x) ** 2 + (a.y - self.y) ** 2))
+                    return True
             elif job_type == "farm":
                 for f in farms:
                     for pos, data in f.plots.items():
@@ -607,7 +644,7 @@ class Colonist:
                                                                                                                      'smelt_queue',
                                                                                                                      None):
                         if self.assign_smelt(world, items, stockpiles, buildings, b): return True
-            elif job_type == "harvest" and self.auto_harvest:
+            elif job_type == "harvest":
                 if self._try_harvest(world, buildings): return True
             elif job_type == "haul":
                 if self._try_haul(world, items, stockpiles, buildings): return True
@@ -624,28 +661,39 @@ class Colonist:
         cur_x, cur_y = self.current_tile()
         has_pickaxe = self.weapon_key in ("stone_pickaxe", "iron_pickaxe")
 
-        for y in range(world.rows):
-            for x in range(world.cols):
+        if Colonist._designated_harvests:
+            for (x, y) in Colonist._designated_harvests:
                 tile = world.get(x, y)
                 if tile in (T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK) and (x, y) not in Colonist._reserved_harvests:
                     if tile == T_IRON_ROCK and not has_pickaxe: continue
                     d = abs(x - cur_x) + abs(y - cur_y)
-                    drop = None
-                    if tile == T_ROCK:
-                        drop = "stone"
-                    elif tile == T_TREE:
-                        drop = "wood"
-                    elif tile == T_BERRY:
-                        drop = "food"
-                    elif tile == T_IRON_ROCK:
-                        drop = "iron_ore"
-                    if drop in needed_kinds: d -= 100000
                     if d < best_dist: best_dist, best_pos = d, (x, y)
+        else:
+            if needed_kinds:
+                for y in range(world.rows):
+                    for x in range(world.cols):
+                        tile = world.get(x, y)
+                        if tile in (T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK) and (x, y) not in Colonist._reserved_harvests:
+                            if tile == T_IRON_ROCK and not has_pickaxe: continue
+                            drop = None
+                            if tile == T_ROCK:
+                                drop = "stone"
+                            elif tile == T_TREE:
+                                drop = "wood"
+                            elif tile == T_BERRY:
+                                drop = "food"
+                            elif tile == T_IRON_ROCK:
+                                drop = "iron_ore"
+                            if drop in needed_kinds:
+                                d = abs(x - cur_x) + abs(y - cur_y)
+                                if d < best_dist: best_dist, best_pos = d, (x, y)
+
         if best_pos and self.assign_harvest(world, best_pos[0], best_pos[1]): return True
         return False
 
     def _try_haul(self, world, items, stockpiles, buildings):
         if self.carrying: return False
+        if self.build_lock is not None: return False
         target_stacks = []
         for (tx, ty, kind), stack in list(items.stacks.items()):
             if stack.amount <= 0 or stockpiles.find_stockpile_for(tx, ty) is not None or getattr(stack, "reserved_by",
@@ -679,7 +727,12 @@ class Colonist:
         unassigned_bps = set(bp for bp in buildings.blueprints.values() if bp.reserved_by is None)
         cur_x, cur_y = self.current_tile()
         for bp in sorted(list(unassigned_bps), key=lambda bp: abs(bp.tx - cur_x) + abs(bp.ty - cur_y)):
-            if self.assign_build(world, buildings, items, stockpiles, bp): return True
+            if self.assign_build(world, buildings, items, stockpiles, bp):
+                new_lock = (bp.tx, bp.ty, bp.layer)
+                if self.build_lock != new_lock:
+                    self.build_lock = new_lock
+                    self.build_lock_timer = 0.0
+                return True
         return False
 
     def _find_dst_slot(self, items, stockpiles):
@@ -690,6 +743,9 @@ class Colonist:
 
     def assign_attack(self, enemy):
         self.target_enemy = enemy
+        # 玩家指定的攻击目标 -> 上战斗锁
+        self.combat_lock = enemy
+        self.combat_lock_timer = 0.0
         return True
 
     def enqueue_command(self, cmd):
@@ -723,10 +779,36 @@ class Colonist:
         self.hit_flash = max(0, self.hit_flash - dt)
         if self.hp <= 0: return
 
-        # 防卡死机制，缩短为 1.5 秒
+        # 战斗锁维护：目标死了/消失了就清锁；否则保持锁定
+        if self.combat_lock is not None:
+            if self.combat_lock.hp <= 0:
+                self.combat_lock = None
+                self.combat_lock_timer = 0.0
+            else:
+                self.combat_lock_timer += dt
+                # 目标被意外清掉时，重新绑定
+                if self.target_enemy is None or self.target_enemy.hp <= 0:
+                    self.target_enemy = self.combat_lock
+                # 30 秒都打不死（比如目标卡死无法到达），自动放弃
+                if self.combat_lock_timer > 30.0:
+                    self.combat_lock = None
+                    self.combat_lock_timer = 0.0
+
+        # 建造锁超时释放
+        if self.build_lock is not None:
+            self.build_lock_timer += dt
+            if self.build_lock_timer > 30.0:
+                self.build_lock = None
+                self.build_lock_timer = 0.0
+                print(f"[建造锁超时] {self.name} 释放建造锁")
+
+        # 防卡死机制
         moved = abs(self.x - self.last_pos[0]) > 0.1 or abs(self.y - self.last_pos[1]) > 0.1
         worked = abs(self.work_progress - self.last_prog) > 0.1
-        if not moved and not worked and self.state not in ("sleeping", "eating") and self.is_busy():
+        # 玩家指定战斗期间，不触发防卡死（攻击冷却不算“卡死”）
+        if self.combat_lock is not None:
+            self.stuck_timer = 0.0
+        elif not moved and not worked and self.state not in ("sleeping", "eating") and self.is_busy():
             self.stuck_timer += dt
         else:
             self.stuck_timer = 0.0
@@ -740,6 +822,8 @@ class Colonist:
             self.target_enemy = None
             self.target_animal = None
             self.state = None
+            self.build_lock = None
+            self.build_lock_timer = 0.0
             if self.carrying: self._drop_food(items)
             print(f"[防卡死] {self.name} 被强制重置")
 
@@ -751,6 +835,9 @@ class Colonist:
             e = self.target_enemy
             if e.hp <= 0:
                 self.target_enemy = None
+                if self.combat_lock is e:
+                    self.combat_lock = None
+                    self.combat_lock_timer = 0.0
             else:
                 dx, dy = e.x - self.x, e.y - self.y
                 self.facing_angle = math.atan2(dy, dx)
@@ -767,7 +854,11 @@ class Colonist:
                             self.recent_shot = ("shot", mx, my, e.x, e.y, wdef["color"])
                         dead = e.take_damage(self.attack_damage, attacker=self)
                         self.cooldown_timer = self.attack_cooldown
-                        if dead: self.target_enemy = None
+                        if dead:
+                            self.target_enemy = None
+                            if self.combat_lock is e:
+                                self.combat_lock = None
+                                self.combat_lock_timer = 0.0
                     return
                 elif not self.path:
                     adj = self._find_adjacent(world, self.current_tile(), *e.current_tile())
@@ -867,6 +958,9 @@ class Colonist:
 
         if jt == "build":
             if j["bp"].reserved_by != self.id or (j["bp"].tx, j["bp"].ty, j["bp"].layer) not in buildings.blueprints:
+                if self.build_lock == (j["bp"].tx, j["bp"].ty, j["bp"].layer):
+                    self.build_lock = None
+                    self.build_lock_timer = 0.0
                 self._release_job()
                 return
 
@@ -921,18 +1015,20 @@ class Colonist:
                     self._release_job()
             return
 
+
         elif jt == "take_from_cabinet":
             cabinet = j["cabinet"]
             kind = j["kind"]
+            want_amt = j.get("amount", 999)
             if cabinet.marked_for_deconstruction or cabinet.inventory.get(kind, 0) <= 0:
                 self._release_job()
                 return
-
             if j["stage"] == "to_cabinet":
                 if self.current_tile() == (cabinet.tx, cabinet.ty) or self._find_adjacent(world, self.current_tile(),
-                                                                                          cabinet.tx, cabinet.ty):
-                    amount = cabinet.inventory.get(kind, 0)
-                    if cabinet.remove_item(kind, amount):
+                                                                                cabinet.tx, cabinet.ty):
+                    avail = cabinet.inventory.get(kind, 0)
+                    take_amt = min(avail, want_amt)
+                    if cabinet.remove_item(kind, take_amt):
                         if kind in ("axe", "stone_pickaxe", "iron_pickaxe", "longsword", "gun"):
                             new_w = get_weapon(kind)
                             curr_w = self.get_weapon_def()
@@ -940,14 +1036,15 @@ class Colonist:
                                 if self.weapon_key != "fist":
                                     items.add(self.weapon_key, 1, *self.current_tile())
                                 self.equip_weapon(kind)
+                                if take_amt > 1:
+                                    items.add(kind, take_amt - 1, *self.current_tile())
                                 self._release_job()
                                 return
-                        self.carrying = {"kind": kind, "amount": amount}
+                        self.carrying = {"kind": kind, "amount": take_amt}
                         j["stage"] = "storing"
                         self._find_storage_target(world, items, stockpiles, buildings, j)
                 else:
                     self._release_job()
-
             elif j["stage"] == "storing":
                 if not self.carrying: self._release_job(); return
                 if j.get("target_kind") == "cabinet":
@@ -986,6 +1083,8 @@ class Colonist:
                 if t in (T_ROCK, T_IRON_ROCK) and wdef.get("mine_bonus"): dmg *= 2.5
                 done, kind, amt = world.damage_resource(j["tx"], j["ty"], int(dmg))
                 if done:
+                    if (j["tx"], j["ty"]) in Colonist._designated_harvests:
+                        Colonist._designated_harvests.remove((j["tx"], j["ty"]))
                     if items is not None and kind is not None: items.add(kind, amt, j["tx"], j["ty"])
                     self._release_job()
                     break
@@ -1019,12 +1118,12 @@ class Colonist:
                 buildings.remove_building(tx, ty, layer)
                 self._release_job()
         elif jt == "research":
-                b = buildings.get_building_at(j["tx"], j["ty"])
-                if not b or b.marked_for_deconstruction or not research or not research.current_research:
-                    self._release_job()
-                    return
-                self.work_progress += self.work_speed * dt  # 【修复】加上这一句，防止被防卡死误杀
-                research.add_progress(self.work_speed * 0.1 * dt)
+            b = buildings.get_building_at(j["tx"], j["ty"])
+            if not b or b.marked_for_deconstruction or not research or not research.current_research:
+                self._release_job()
+                return
+            self.work_progress += self.work_speed * dt
+            research.add_progress(self.work_speed * 0.1 * dt)
 
         elif jt == "cook":
             stove = j["stove"]
@@ -1351,8 +1450,14 @@ class Colonist:
                     self.work_progress = 0.0
                     cab = j.get("cabinet")
                     if cab:
-                        cab.add_item(j["kind"], self.carrying["amount"]);
+                        space = cab.capacity - cab.inventory.get(j["kind"], 0)
+                        put_amt = min(self.carrying["amount"], space)
+                        if put_amt > 0:
+                            cab.add_item(j["kind"], put_amt)
+                            self.carrying["amount"] -= put_amt
                         cab.reserved_by = None
+                        if self.carrying["amount"] > 0:
+                            items.add(j["kind"], self.carrying["amount"], *self.current_tile())
                     else:
                         items.add(j["kind"], self.carrying["amount"], j["dst"][0], j["dst"][1])
                     self.carrying = None
@@ -1423,6 +1528,8 @@ class Colonist:
                     if bp.is_complete():
                         buildings.complete_blueprint(bp)
                         self.carrying = None
+                        self.build_lock = None
+                        self.build_lock_timer = 0.0
                         self._release_job()
                         self._push_out_of_wall(world)
                 else:
@@ -1507,6 +1614,10 @@ class Colonist:
 
         if self.state in ("going_to_eat", "going_to_sleep"):
             self.state = None
+
+        # 玩家发起新任务时会先调 _release_job，同步清掉战斗锁定
+        self.combat_lock = None
+        self.combat_lock_timer = 0.0
 
     def draw(self, surface, camera, font):
         if self.hp <= 0: return

@@ -21,6 +21,9 @@ class BuildingHUD:
         self.item_rects = {}
         self.last_action = None
 
+        self.take_input_rects = {}
+        self.take_btn_rects = {}
+
     def get_counts(self, selected_building):
         counts = {"meal_simple": 0, "meal_fine": 0}
         if hasattr(selected_building, "cook_queue"):
@@ -54,8 +57,9 @@ class BuildingHUD:
     def handle_key(self, event, selected_building):
         if self.active_input:
             if event.key == pygame.K_RETURN:
-                self.apply_input(selected_building);
-                self.active_input = None;
+                if selected_building.kind not in ("small_cabinet", "large_cabinet"):
+                    self.apply_input(selected_building)
+                    self.active_input = None
                 return True
             elif event.key == pygame.K_BACKSPACE:
                 self.edit_text = self.edit_text[:-1];
@@ -89,7 +93,6 @@ class BuildingHUD:
             return True
         return False
 
-    # 【修改】接收 research 参数
     def handle_click(self, mouse_pos, selected_building, global_items, research):
         if not selected_building: return False, None
         self.last_action = None
@@ -100,10 +103,26 @@ class BuildingHUD:
                     selected_building.marked_for_deconstruction = True
                     return True, None
 
+                # 处理柜子取出逻辑
                 if selected_building.kind in ("small_cabinet", "large_cabinet"):
-                    for kind, rect in self.item_rects.items():
+                    for kind, rect in self.take_input_rects.items():
                         if rect.collidepoint(mouse_pos):
-                            self.last_action = ("take", kind)
+                            self.active_input = f"take_{kind}"
+                            self.edit_text = ""
+                            return True, None
+
+                    for kind, btn_rect in self.take_btn_rects.items():
+                        if btn_rect.collidepoint(mouse_pos):
+                            if self.active_input == f"take_{kind}" and self.edit_text.strip():
+                                try:
+                                    amt = int(self.edit_text)
+                                    if amt > 0:
+                                        self.last_action = ("take", kind, amt)
+                                except:
+                                    self.last_action = ("take", kind, selected_building.inventory.get(kind, 0))
+                            else:
+                                self.last_action = ("take", kind, selected_building.inventory.get(kind, 0))
+                            self.active_input = None
                             return True, None
 
                 for k, rect in self.input_rects.items():
@@ -138,7 +157,6 @@ class BuildingHUD:
             self.active_input = None
         return False, None
 
-    # 【修改】接收 research 参数
     def draw(self, surface, selected_building, global_items, research):
         if not selected_building: return
 
@@ -150,10 +168,15 @@ class BuildingHUD:
 
         x, y, w = self.panel_rect.x, self.panel_rect.y, self.panel_w
 
+        # 判断是否为蓝图（未完工）
+        is_blueprint = not hasattr(selected_building, "hp")
+
         if selected_building.kind in ("stove", "furnace", "workbench"):
             h = 380
         elif selected_building.kind in ("small_cabinet", "large_cabinet"):
             h = 500
+        elif is_blueprint:
+            h = 320
         else:
             h = 300
 
@@ -162,6 +185,8 @@ class BuildingHUD:
         self.input_rects.clear()
         self.name_rects.clear()
         self.item_rects.clear()
+        self.take_input_rects.clear()
+        self.take_btn_rects.clear()
 
         panel = pygame.Surface((w, h), pygame.SRCALPHA)
         panel.fill((20, 20, 25, 230))
@@ -169,10 +194,46 @@ class BuildingHUD:
         pygame.draw.rect(surface, (100, 100, 110), (x, y, w, h), 2)
 
         title = BUILDING_DEFS[selected_building.kind]["variants"][selected_building.material]["name"]
+        if is_blueprint:
+            title += " (蓝图)"
         surface.blit(self.font.render(title, True, (255, 220, 100)), (x + 10, y + 10))
+
+        if is_blueprint:
+            # ---- 蓝图：显示建造进度 + 缺料 ----
+            work_done = getattr(selected_building, "work_done", 0)
+            total_work = getattr(selected_building, "total_work", None)
+            if total_work is None or total_work <= 0:
+                bd = BUILDING_DEFS[selected_building.kind]["variants"][selected_building.material]
+                total_work = bd.get("build_time", bd.get("work", 100))
+            ratio = max(0.0, min(1.0, work_done / max(1, total_work)))
+            surface.blit(self.font.render(f"建造进度: {int(ratio * 100)}%", True, WHITE), (x + 10, y + 40))
+            pygame.draw.rect(surface, (40, 40, 20), (x + 10, y + 65, w - 20, 10))
+            pygame.draw.rect(surface, (220, 200, 80), (x + 10, y + 65, int((w - 20) * ratio), 10))
+
+            if hasattr(selected_building, "missing_materials"):
+                missing = selected_building.missing_materials()
+                if missing:
+                    surface.blit(self.font.render("缺少材料:", True, (255, 150, 100)), (x + 10, y + 95))
+                    yy = y + 115
+                    for k, v in missing.items():
+                        name = ITEM_DEFS.get(k, {}).get("name", k)
+                        surface.blit(self.font.render(f"{name} x{v}", True, (255, 200, 100)), (x + 20, yy))
+                        yy += 20
+                else:
+                    surface.blit(self.font.render("材料已齐，等待建造", True, (150, 255, 150)),
+                                 (x + 10, y + 95))
+
+            # 蓝图的拆除按钮（取消建造），单独用一个矩形
+            self.deconstruct_btn = pygame.Rect(x + 10, y + h - 45, w - 20, 30)
+            pygame.draw.rect(surface, (180, 60, 60), self.deconstruct_btn, border_radius=4)
+            btn_txt = self.font.render("取消建造", True, WHITE)
+            surface.blit(btn_txt, (self.deconstruct_btn.centerx - btn_txt.get_width() // 2,
+                                   self.deconstruct_btn.y + 6))
+            return
+
+        # ---- 已完工建筑：原逻辑 ----
         surface.blit(self.font.render(f"耐久: {int(selected_building.hp)}/{selected_building.max_hp}", True, WHITE),
                      (x + 10, y + 40))
-
         pygame.draw.rect(surface, (40, 20, 20), (x + 10, y + 65, w - 20, 10))
         pygame.draw.rect(surface, (200, 80, 80),
                          (x + 10, y + 65, int((w - 20) * (selected_building.hp / selected_building.max_hp)), 10))
@@ -258,13 +319,12 @@ class BuildingHUD:
 
         elif selected_building.kind == "workbench":
             surface.blit(self.font.render("制造装备:", True, (200, 200, 100)), (x + 10, y + 100))
-            r1 = pygame.Rect(x + 10, y + 130, 80, 30);
-            r2 = pygame.Rect(x + 100, y + 130, 80, 30);
+            r1 = pygame.Rect(x + 10, y + 130, 80, 30)
+            r2 = pygame.Rect(x + 100, y + 130, 80, 30)
             r3 = pygame.Rect(x + 190, y + 130, 80, 30)
-            r4 = pygame.Rect(x + 10, y + 170, 80, 30);
+            r4 = pygame.Rect(x + 10, y + 170, 80, 30)
             r5 = pygame.Rect(x + 100, y + 170, 80, 30)
 
-            # 【新增】判断科技解锁状态
             can_iron = research and "crafting" in research.completed
             can_gun = research and "gunsmithing" in research.completed
 
@@ -273,15 +333,15 @@ class BuildingHUD:
             col4 = (200, 200, 210) if can_iron else (60, 60, 60)
             col5 = (100, 120, 180) if can_gun else (60, 60, 60)
 
-            pygame.draw.rect(surface, (130, 130, 135), r1, border_radius=4);
+            pygame.draw.rect(surface, (130, 130, 135), r1, border_radius=4)
             surface.blit(self.font.render("石镐(2石)", True, (0, 0, 0)), (x + 15, y + 137))
-            pygame.draw.rect(surface, col2, r2, border_radius=4);
+            pygame.draw.rect(surface, col2, r2, border_radius=4)
             surface.blit(self.font.render("铁斧(2铁)", True, (0, 0, 0)), (x + 105, y + 137))
-            pygame.draw.rect(surface, col3, r3, border_radius=4);
+            pygame.draw.rect(surface, col3, r3, border_radius=4)
             surface.blit(self.font.render("铁镐(2铁)", True, (0, 0, 0)), (x + 195, y + 137))
-            pygame.draw.rect(surface, col4, r4, border_radius=4);
+            pygame.draw.rect(surface, col4, r4, border_radius=4)
             surface.blit(self.font.render("长剑(3铁)", True, (0, 0, 0)), (x + 15, y + 177))
-            pygame.draw.rect(surface, col5, r5, border_radius=4);
+            pygame.draw.rect(surface, col5, r5, border_radius=4)
             surface.blit(self.font.render("枪械(5铁)", True, (255, 255, 255)), (x + 105, y + 177))
 
             self.btn_rects["craft_stone_pick"] = r1
@@ -297,27 +357,35 @@ class BuildingHUD:
 
         elif selected_building.kind in ("small_cabinet", "large_cabinet"):
             pygame.draw.line(surface, (80, 80, 80), (x + 10, y + 85), (x + w - 10, y + 85), 1)
-            surface.blit(self.font.render("内部物品:", True, (200, 200, 100)), (x + 10, y + 95))
+            surface.blit(self.font.render("内部物品 (输入数量后点击取出):", True, (200, 200, 100)), (x + 10, y + 95))
 
             y_off = y + 125
             sorted_items = list(selected_building.inventory.items())
 
             for idx in range(10):
-                num_txt = f"{idx + 1}."
-                surface.blit(self.font.render(num_txt, True, (120, 120, 120)), (x + 15, y_off))
-
                 if idx < len(sorted_items):
                     kind, amt = sorted_items[idx]
                     name = ITEM_DEFS.get(kind, {}).get("name", kind)
-                    txt = self.font.render(f"{name}: {amt}", True, WHITE)
+                    txt = self.font.render(f"{name} ({amt})", True, WHITE)
+                    surface.blit(txt, (x + 15, y_off))
 
-                    item_rect = pygame.Rect(x + 40, y_off - 4, 200, 28)
-                    self.item_rects[kind] = item_rect
+                    take_inp_rect = pygame.Rect(x + 140, y_off - 4, 50, 24)
+                    self.take_input_rects[kind] = take_inp_rect
+                    pygame.draw.rect(surface, (40, 40, 40), take_inp_rect)
+                    if self.active_input == f"take_{kind}":
+                        pygame.draw.rect(surface, (255, 255, 255), take_inp_rect, 1)
+                        inp_txt = self.edit_text + ("|" if pygame.time.get_ticks() % 1000 < 500 else "")
+                    else:
+                        pygame.draw.rect(surface, (80, 80, 100), take_inp_rect, 1)
+                        inp_txt = ""
+                    surface.blit(self.font.render(inp_txt, True, WHITE), (x + 145, y_off - 2))
 
-                    if item_rect.collidepoint(pygame.mouse.get_pos()):
-                        pygame.draw.rect(surface, (80, 80, 120), item_rect, border_radius=4)
-
-                    surface.blit(txt, (x + 40, y_off))
+                    take_btn_rect = pygame.Rect(x + 195, y_off - 4, 50, 24)
+                    self.take_btn_rects[kind] = take_btn_rect
+                    pygame.draw.rect(surface, (100, 150, 100), take_btn_rect, border_radius=4)
+                    btn_txt = self.font.render("取出", True, WHITE)
+                    surface.blit(btn_txt, (take_btn_rect.centerx - btn_txt.get_width() // 2,
+                                           take_btn_rect.centery - btn_txt.get_height() // 2))
                 y_off += 32
 
             pygame.draw.line(surface, (80, 80, 80), (x + 10, y + h - 75), (x + w - 10, y + h - 75), 1)
@@ -326,7 +394,7 @@ class BuildingHUD:
             surface.blit(self.font.render(f"种类: {types_used} / {types_max}", True, (150, 150, 150)),
                          (x + 10, y + h - 65))
 
-        if not selected_building.marked_for_deconstruction:
+        if not getattr(selected_building, "marked_for_deconstruction", False):
             self.deconstruct_btn = pygame.Rect(x + 10, y + h - 45, w - 20, 30)
             pygame.draw.rect(surface, (180, 60, 60), self.deconstruct_btn, border_radius=4)
             btn_txt = self.font.render("标记为拆除", True, WHITE)

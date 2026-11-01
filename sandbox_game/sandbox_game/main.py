@@ -71,10 +71,7 @@ def main():
 
     selection = Selection()
     hud = HUD(font)
-
-    # 初始化 BuildingHUD，传入当前屏幕宽度
     bhud = BuildingHUD(font, INIT_W)
-
     shud = StockpileHUD(font)
     ihud = ItemHUD(font)
     build_menu = BuildMenu(font)
@@ -127,7 +124,6 @@ def main():
     show_beauty = False
 
     pending_farm_rect = None
-
     selected_building = None
     selected_stockpile = None
     selected_item_stack = None
@@ -139,7 +135,6 @@ def main():
     last_mouse = (0, 0)
     left_down_pos = None
     left_drag_moved = False
-    auto_work = True
     game_speed = 1.0
     is_fullscreen = False
     warning_timer = 0.0
@@ -175,7 +170,6 @@ def main():
         global_items = {}
         for s in items.stacks.values():
             global_items[s.kind] = global_items.get(s.kind, 0) + s.amount
-
         seen_b = set()
         for b in buildings.buildings.values():
             if id(b) in seen_b: continue
@@ -200,12 +194,10 @@ def main():
             elif event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
                 camera.resize(event.w, event.h)
-                # 动态更新 BuildingHUD 的位置
                 bhud.panel_rect.x = event.w - bhud.panel_w - 20
 
             if event.type == pygame.KEYDOWN:
-                if bhud.handle_key(event, selected_building):
-                    continue
+                if bhud.handle_key(event, selected_building): continue
 
                 if event.key == pygame.K_SPACE:
                     if game_speed == 0.0:
@@ -229,15 +221,15 @@ def main():
                     if show_help:
                         show_help = False
                     elif mode is not None:
-                        mode = None
-                        current_build_kind = None
+                        mode = None;
+                        current_build_kind = None;
                         current_build_mat = None
-                        build_menu.active_kind = None
+                        build_menu.active_kind = None;
                         pending_farm_rect = None
                     else:
                         for c in colonists: c.selected = False
-                        selected_building = None
-                        selected_stockpile = None
+                        selected_building = None;
+                        selected_stockpile = None;
                         selected_item_stack = None
                         selection.clear()
                 elif event.key == pygame.K_h:
@@ -246,38 +238,27 @@ def main():
                     show_beauty = not show_beauty
                 elif event.key == pygame.K_b:
                     mode = "build" if mode != "build" else None
-                    current_build_kind = None
-                    current_build_mat = None
+                    current_build_kind = None;
+                    current_build_mat = None;
                     build_menu.active_kind = None
                 elif event.key == pygame.K_s:
                     mode = "stockpile" if mode != "stockpile" else None
                 elif event.key == pygame.K_f:
-                    mode = "farm" if mode != "farm" else None
-                    pending_farm_rect = None
+                    mode = "farm" if mode != "farm" else None; pending_farm_rect = None
                 elif event.key == pygame.K_x:
                     mode = "deconstruct" if mode != "deconstruct" else None
                 elif event.key == pygame.K_r:
                     if mode == "build" and current_build_kind:
                         data = BUILDING_DEFS[current_build_kind]
-                        if data["w"] != data["h"]:
-                            build_rotation = (build_rotation + 1) % 2
+                        if data["w"] != data["h"]: build_rotation = (build_rotation + 1) % 2
                     else:
                         mode = "research" if mode != "research" else None
-                elif event.key == pygame.K_a:
-                    auto_work = not auto_work
-                elif event.key == pygame.K_g:
-                    if selected_colonists:
-                        ah_count = sum(1 for c in selected_colonists if c.auto_harvest)
-                        new_state = not (ah_count == len(selected_colonists))
-                        for c in selected_colonists: c.auto_harvest = new_state
 
             if event.type == pygame.TEXTINPUT:
-                if bhud.handle_text(event, selected_building):
-                    continue
+                if bhud.handle_text(event, selected_building): continue
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                if bhud.handle_right_click(event.pos, selected_building):
-                    continue
+                if bhud.handle_right_click(event.pos, selected_building): continue
                 if not mouse_in_ui:
                     dragging_cam_right = True
                     right_down_pos = event.pos
@@ -291,13 +272,12 @@ def main():
                 if dragging_cam_right:
                     dragging_cam_right = False
                     dist = abs(event.pos[0] - right_down_pos[0]) + abs(event.pos[1] - right_down_pos[1])
-
                     if dist < 15 and mode is None and not show_help and not mouse_in_ui:
                         selected = [c for c in colonists if c.selected and c.hp > 0]
                         if selected:
                             wx, wy = camera.screen_to_world(*event.pos)
                             tx, ty = camera.screen_to_tile(*event.pos)
-
+                            # ... (右键指派逻辑，省略，保持你原有的代码) ...
                             hit_enemy = None
                             for e in enemies:
                                 if (e.x - wx) ** 2 + (e.y - wy) ** 2 <= (e.radius + 12) ** 2: hit_enemy = e; break
@@ -313,32 +293,22 @@ def main():
                             if hit_enemy is not None:
                                 cmd = {"type": "attack", "enemy": hit_enemy}
                                 if not shift_held:
-                                    for c in selected:
-                                        c._release_job()
-                                        c.queue.clear()
-                                        c.state = None
-                                        c.target_enemy = None
-                                        c.target_animal = None
+                                    for c in selected: c._release_job(); c.queue.clear(); c.state = None; c.target_enemy = None; c.target_animal = None
                                     for c in selected: c.assign_attack(hit_enemy)
                                 else:
                                     for c in selected: c.enqueue_command(cmd)
                             elif hit_animal is not None:
                                 cmd = {"type": "hunt", "animal": hit_animal}
                                 if not shift_held:
-                                    for c in selected:
-                                        c._release_job()
-                                        c.queue.clear()
-                                        c.state = None
-                                        c.target_enemy = None
-                                        c.target_animal = None
+                                    for c in selected: c._release_job(); c.queue.clear(); c.state = None; c.target_enemy = None; c.target_animal = None
                                     for c in selected: c.assign_hunt(hit_animal)
                                 else:
                                     for c in selected: c.enqueue_command(cmd)
                             elif buildings.get_building_at(tx, ty) and buildings.get_building_at(tx, ty).kind in (
                                     "small_cabinet", "large_cabinet"):
                                 cabinet = buildings.get_building_at(tx, ty)
-                                selected_building = cabinet
-                                selected_item_stack = None
+                                selected_building = cabinet;
+                                selected_item_stack = None;
                                 selected_stockpile = None
                                 for c in colonists: c.selected = False
                                 for c in selected: c.selected = True
@@ -349,10 +319,7 @@ def main():
                                     cmd = {"type": "craft", "world": world, "items": items, "stockpiles": stockpiles,
                                            "buildings": buildings, "bench": bench}
                                     if not shift_held:
-                                        for c in selected:
-                                            c._release_job()
-                                            c.queue.clear()
-                                            c.state = None
+                                        for c in selected: c._release_job(); c.queue.clear(); c.state = None
                                         selected[0].assign_craft(world, items, stockpiles, buildings, bench)
                                     else:
                                         for c in selected: c.enqueue_command(cmd)
@@ -362,15 +329,11 @@ def main():
                                     cmd = {"type": "equip_from_ground", "world": world, "items": items, "tx": tx,
                                            "ty": ty, "kind": hit_item.kind}
                                     if not shift_held:
-                                        for c in selected:
-                                            c._release_job()
-                                            c.queue.clear()
-                                            c.state = None
+                                        for c in selected: c._release_job(); c.queue.clear(); c.state = None
                                         selected[0].assign_equip_from_ground(world, items, tx, ty, hit_item.kind)
                                     else:
-                                      for c in selected: c.enqueue_command(cmd)
+                                        for c in selected: c.enqueue_command(cmd)
                                 else:
-                                    # 原有的搬运逻辑
                                     cabinet = None
                                     seen_b = set()
                                     for b in buildings.buildings.values():
@@ -379,65 +342,43 @@ def main():
                                         if b.kind in ("small_cabinet",
                                                       "large_cabinet") and not b.marked_for_deconstruction and b.reserved_by is None:
                                             current_types = len(b.inventory.keys())
-                                            if hit_item.kind not in b.inventory and current_types >= b.max_types:
-                                                continue
+                                            if hit_item.kind not in b.inventory and current_types >= b.max_types: continue
                                             space = b.capacity - b.inventory.get(hit_item.kind, 0)
-                                            if space > 0:
-                                                cabinet = b
-                                                break
-
+                                            if space > 0: cabinet = b; break
                                     target_pos = (0, 0)
                                     if cabinet:
                                         target_pos = (cabinet.tx, cabinet.ty)
                                     else:
                                         sp_dst = selected[0]._find_dst_slot(items, stockpiles)
                                         if sp_dst: target_pos = sp_dst
-
                                     if cabinet or target_pos != (0, 0):
                                         cmd = {"type": "haul", "world": world, "items": items, "stockpiles": stockpiles,
                                                "src": (tx, ty), "dst": target_pos, "kind": hit_item.kind,
                                                "amount": selected[0].carry_limit, "cabinet": cabinet}
                                         if not shift_held:
-                                            for c in selected:
-                                                c._release_job()
-                                                c.queue.clear()
-                                                c.state = None
+                                            for c in selected: c._release_job(); c.queue.clear(); c.state = None
                                             selected[0].assign_haul(world, items, stockpiles, tx, ty, target_pos[0],
                                                                     target_pos[1], hit_item.kind,
                                                                     selected[0].carry_limit, cabinet)
                                         else:
                                             for c in selected: c.enqueue_command(cmd)
-
                             elif buildings.get_blueprints_at(tx, ty):
                                 bp = buildings.get_blueprints_at(tx, ty)[0]
                                 if bp.reserved_by is not None:
                                     for c2 in colonists:
-                                        if c2.id == bp.reserved_by:
-                                            c2._release_job()
-                                            break
+                                        if c2.id == bp.reserved_by: c2._release_job(); break
                                     bp.reserved_by = None
-
                                 cmd = {"type": "build", "world": world, "buildings": buildings, "items": items,
                                        "stockpiles": stockpiles, "bp": bp}
                                 if not shift_held:
-                                    for c in selected:
-                                        c._release_job()
-                                        c.queue.clear()
-                                        c.state = None
-                                        c.target_enemy = None
-                                        c.target_animal = None
+                                    for c in selected: c._release_job(); c.queue.clear(); c.state = None; c.target_enemy = None; c.target_animal = None
                                     selected[0].assign_build(world, buildings, items, stockpiles, bp)
                                 else:
                                     for c in selected: c.enqueue_command(cmd)
                             elif world.is_harvestable(tx, ty):
                                 cmd = {"type": "harvest", "world": world, "tx": tx, "ty": ty}
                                 if not shift_held:
-                                    for c in selected:
-                                        c._release_job()
-                                        c.queue.clear()
-                                        c.state = None
-                                        c.target_enemy = None
-                                        c.target_animal = None
+                                    for c in selected: c._release_job(); c.queue.clear(); c.state = None; c.target_enemy = None; c.target_animal = None
                                     selected[0].assign_harvest(world, tx, ty)
                                 else:
                                     for c in selected: c.enqueue_command(cmd)
@@ -449,11 +390,11 @@ def main():
                                     if not world.is_walkable(gx, gy): gx, gy = tx, ty
                                     cmd = {"type": "move", "world": world, "tx": gx, "ty": gy}
                                     if not shift_held:
-                                        c._release_job()
-                                        c.queue.clear()
-                                        c.state = None
-                                        c.target_enemy = None
-                                        c.target_animal = None
+                                        c._release_job();
+                                        c.queue.clear();
+                                        c.state = None;
+                                        c.target_enemy = None;
+                                        c.target_animal = None;
                                         c.move_to(world, gx, gy)
                                     else:
                                         c.enqueue_command(cmd)
@@ -464,12 +405,12 @@ def main():
                     if pygame.Rect(screen_w // 2 - 180, screen_h // 2 - 30, 160, 50).collidepoint(event.pos):
                         if research_mgr.can_plant("berry"):
                             farms.add(pending_farm_rect, "berry")
-                            pending_farm_rect = None
+                            pending_farm_rect = None;
                             mode = None
                     elif pygame.Rect(screen_w // 2 + 20, screen_h // 2 - 30, 160, 50).collidepoint(event.pos):
                         if research_mgr.can_plant("tree"):
                             farms.add(pending_farm_rect, "tree")
-                            pending_farm_rect = None
+                            pending_farm_rect = None;
                             mode = None
                     elif pygame.Rect(screen_w // 2 - 50, screen_h // 2 + 60, 100, 30).collidepoint(event.pos):
                         pending_farm_rect = None
@@ -480,35 +421,47 @@ def main():
                     left_down_pos = None
                     continue
 
+                # 【修改】加上 if consumed 拦截
                 consumed, action = bhud.handle_click(event.pos, selected_building, global_items, research_mgr)
                 if consumed:
-                    # 处理点击柜子物品指派
                     if bhud.last_action and bhud.last_action[0] == "take":
-                        act_type, take_kind = bhud.last_action
+                        act_type, take_kind, take_amt = bhud.last_action
+                        success = False
+
+                        # 如果有选中小人，优先让选中的去
                         if selected_colonists:
-                            selected_colonists[0].assign_take_from_cabinet(world, items, stockpiles, buildings,
-                                                                           selected_building, take_kind)
+                            for c in selected_colonists:
+                                if c.hp > 0:
+                                    if c.assign_take_from_cabinet(world, items, stockpiles, buildings,
+                                                                  selected_building, take_kind, take_amt):
+                                        success = True
+                                        break
+                        # 如果没选中，自动找一个空闲的
+                        else:
+                            for c in colonists:
+                                if c.hp > 0:
+                                    if c.assign_take_from_cabinet(world, items, stockpiles, buildings,
+                                                                  selected_building, take_kind, take_amt):
+                                        success = True
+                                        break
+
+                        # 如果全部失败（比如路被堵死），给玩家提示
+                        if not success:
+                            log.add("指派取物失败：小人无法到达柜子！", (255, 100, 100))
 
                     left_down_pos = None
                     continue
-
                 consumed_sp, delete_sp = shud.handle_click(event.pos)
                 if consumed_sp:
                     if delete_sp:
-                        if selected_stockpile in stockpiles.stockpiles:
-                            stockpiles.stockpiles.remove(selected_stockpile)
+                        if selected_stockpile in stockpiles.stockpiles: stockpiles.stockpiles.remove(selected_stockpile)
                         selected_stockpile = None
-                    left_down_pos = None
+                    left_down_pos = None;
                     continue
-
-                if ihud.handle_click(event.pos):
-                    left_down_pos = None
-                    continue
+                if ihud.handle_click(event.pos): left_down_pos = None; continue
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if mouse_in_ui:
-                    left_down_pos = None
-                    continue
+                if mouse_in_ui: left_down_pos = None; continue
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 clicked_mode = toolbar.handle_click(event.pos)
@@ -524,35 +477,29 @@ def main():
                         mode = clicked_mode;
                         current_build_kind = None;
                         current_build_mat = None
-                    drag_start = None
-                    drag_end = None
+                    drag_start = None;
+                    drag_end = None;
                     left_down_pos = None
                     continue
-
                 if mode == "build" and event.pos[1] > screen_h - ui_bottom_height:
                     k, m, is_selected = build_menu.handle_click(event.pos, research_mgr)
-                    if is_selected:
-                        current_build_kind = k
-                        current_build_mat = m
-                        build_rotation = 0
-                    left_down_pos = None
+                    if is_selected: current_build_kind = k; current_build_mat = m; build_rotation = 0
+                    left_down_pos = None;
                     continue
-
                 if mode == "research":
                     panel_w, panel_h = 600, 400
                     rx, ry = screen_w // 2 - panel_w // 2, screen_h // 2 - panel_h // 2
                     if rx <= event.pos[0] <= rx + panel_w and ry <= event.pos[1] <= ry + panel_h:
                         research_menu.handle_click(event.pos, research_mgr)
-                        left_down_pos = None
+                        left_down_pos = None;
                         continue
 
             if show_help:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1: show_help = False
                 continue
 
-            if mode in ("stockpile", "build", "deconstruct", "farm"):
+            if mode in ("stockpile", "build", "deconstruct", "farm", "harvest_area", "hunt_area"):
                 if pending_farm_rect: continue
-
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if mode == "build" and (current_build_kind is None or current_build_mat is None): continue
                     if event.pos[1] < screen_h - ui_bottom_height:
@@ -562,10 +509,11 @@ def main():
                     drag_end = camera.screen_to_tile(*event.pos)
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if drag_start and drag_end:
-                        x1, y1 = drag_start
+                        x1, y1 = drag_start;
                         x2, y2 = drag_end
                         tx1, tx2 = min(x1, x2), max(x1, x2)
                         ty1, ty2 = min(y1, y2), max(y1, y2)
+
                         if mode == "stockpile":
                             stockpiles.add((tx1, ty1, tx2, ty2))
                             mode = None
@@ -584,15 +532,27 @@ def main():
                             stockpiles.remove_tiles(tx1, ty1, tx2, ty2)
                             farms.remove_tiles(tx1, ty1, tx2, ty2)
                             buildings.remove_area(tx1, ty1, tx2, ty2)
-                    drag_start = None
+                        # 【新增】处理采集和狩猎
+                        elif mode == "harvest_area":
+                            for ty in range(ty1, ty2 + 1):
+                                for tx in range(tx1, tx2 + 1):
+                                    if world.is_harvestable(tx, ty):
+                                        Colonist._designated_harvests.add((tx, ty))
+                            mode = None
+                        elif mode == "hunt_area":
+                            for a in animals:
+                                atx, aty = a.current_tile()
+                                if tx1 <= atx <= tx2 and ty1 <= aty <= ty2:
+                                    a.is_hunted = True
+                            mode = None
+                    drag_start = None;
                     drag_end = None
                 continue
 
             if not dragging_cam_right:
                 selection.handle_event(event, camera, mouse_pos)
-
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    left_down_pos = event.pos
+                    left_down_pos = event.pos;
                     left_drag_moved = False
                 elif event.type == pygame.MOUSEMOTION and left_down_pos is not None:
                     if abs(event.pos[0] - left_down_pos[0]) > 8 or abs(event.pos[1] - left_down_pos[1]) > 8:
@@ -601,34 +561,27 @@ def main():
                     if not left_drag_moved and left_down_pos is not None:
                         wx, wy = camera.screen_to_world(*event.pos)
                         tx, ty = camera.screen_to_tile(*event.pos)
-
                         hit_col = None
                         for c in colonists:
                             if c.hp <= 0: continue
-                            if (c.x - wx) ** 2 + (c.y - wy) ** 2 <= (c.radius + 15) ** 2:
-                                hit_col = c
-                                break
-
+                            if (c.x - wx) ** 2 + (c.y - wy) ** 2 <= (c.radius + 15) ** 2: hit_col = c; break
                         if hit_col:
                             if not shift_held:
                                 for c in colonists: c.selected = False
                             hit_col.selected = True
-                            selected_building = None
-                            selected_stockpile = None
+                            selected_building = None;
+                            selected_stockpile = None;
                             selected_item_stack = None
                             if not shift_held: selection.selected_tiles.clear()
                         else:
                             hit_item = None
                             for s in items.get_at(tx, ty):
-                                if (s.x - wx) ** 2 + (s.y - wy) ** 2 <= (TILE_SIZE // 2) ** 2:
-                                    hit_item = s
-                                    break
-
+                                if (s.x - wx) ** 2 + (s.y - wy) ** 2 <= (TILE_SIZE // 2) ** 2: hit_item = s; break
                             if hit_item:
-                                selected_building = None
+                                selected_building = None;
                                 selected_stockpile = None
                                 selected_item_stack = hit_item
-                                ihud.set_target(hit_item, tx, ty)
+                                ihud.set_target(hit_item, tx, ty);
                                 ihud.in_cabinet = False
                                 selection.selected_tiles.clear()
                             else:
@@ -636,38 +589,35 @@ def main():
                                 if not hit_building:
                                     bps = buildings.get_blueprints_at(tx, ty)
                                     if bps: hit_building = bps[0]
-
-                                if hit_building and hit_building.kind == "floor":
-                                    hit_building = None
-
+                                if hit_building and hit_building.kind == "floor": hit_building = None
                                 if hit_building:
                                     for c in colonists: c.selected = False
-                                    selected_building = hit_building
-                                    selected_stockpile = None
+                                    selected_building = hit_building;
+                                    selected_stockpile = None;
                                     selected_item_stack = None
                                     selection.selected_tiles.clear()
                                 else:
                                     hit_sp = stockpiles.find_stockpile_for(tx, ty)
                                     if hit_sp:
-                                        selected_building = None
-                                        selected_stockpile = hit_sp
+                                        selected_building = None;
+                                        selected_stockpile = hit_sp;
                                         selected_item_stack = None
                                         shud.set_target(hit_sp, event.pos, screen_w, screen_h)
                                     else:
                                         if not shift_held:
                                             for c in colonists: c.selected = False
-                                            selected_building = None
-                                            selected_stockpile = None
+                                            selected_building = None;
+                                            selected_stockpile = None;
                                             selected_item_stack = None
                     else:
                         for c in colonists: c.selected = False
-                        selected_building = None
-                        selected_stockpile = None
+                        selected_building = None;
+                        selected_stockpile = None;
                         selected_item_stack = None
                         for c in colonists:
                             if c.hp > 0 and c.current_tile() in selection.selected_tiles:
                                 c.selected = True
-                    left_down_pos = None
+                    left_down_pos = None;
                     left_drag_moved = False
 
         edge_margin = 20
@@ -688,10 +638,8 @@ def main():
                 c.check_urgent_needs(world, items, stockpiles, buildings)
                 c.update(dt, world, items, stockpiles, buildings, enemies, game_time, research_mgr)
 
-            for e in enemies:
-                e.update(dt, world, colonists, buildings)
-            for a in animals:
-                a.update(dt, world, colonists)
+            for e in enemies: e.update(dt, world, colonists, buildings)
+            for a in animals: a.update(dt, world, colonists)
             animals = [a for a in animals if a.hp > 0]
 
             animal_respawn_timer -= dt
@@ -711,7 +659,7 @@ def main():
             if enemy_invasion_timer <= 0:
                 enemy_invasion_timer = game_time.day_length_sec * 3
                 if random.random() < 0.5:
-                    count = random.randint(1, 3)
+                    count = random.randint(1, 2)
                     for _ in range(count):
                         side = random.randint(0, 3)
                         if side == 0:
@@ -722,9 +670,8 @@ def main():
                             ex, ey = 5, random.randint(5, MAP_HEIGHT - 5)
                         else:
                             ex, ey = MAP_WIDTH - 5, random.randint(5, MAP_HEIGHT - 5)
-
-                        if world.is_walkable(ex, ey):
-                            enemies.append(Enemy(ex, ey, random.choice(["club", "spear", "longsword", "fist"])))
+                        if world.is_walkable(ex, ey): enemies.append(
+                            Enemy(ex, ey, random.choice(["club", "spear", "longsword", "fist"])))
                     log.add(f"警告：发现 {count} 名敌人入侵！", (255, 50, 50))
                     warning_text = f"警告：发现 {count} 名敌人入侵！"
                     warning_timer = 3.0
@@ -767,54 +714,12 @@ def main():
                         selected_building.layer) not in buildings.buildings: selected_building = None
 
             if selected_item_stack:
-                if selected_item_stack.amount <= 0 or selected_item_stack not in items.stacks.values():
-                    selected_item_stack = None
+                if selected_item_stack.amount <= 0 or selected_item_stack not in items.stacks.values(): selected_item_stack = None
 
-            if auto_work:
-                for c in colonists:
-                    if c.is_idle():
-                        c.try_find_job(world, items, stockpiles, buildings, research_mgr, animals, farms.farms)
-
-            if not hasattr(main, "debug_timer"):
-                main.debug_timer = 0.0
-            main.debug_timer += dt
-            if main.debug_timer >= 2.0:  # 每 2 秒打印一次状态
-                main.debug_timer = 0.0
-                print("\n========== 游戏状态检测 ==========")
-                print(f"全局自动工作: {auto_work}")
-
-                # 1. 打印小人状态
-                for c in colonists:
-                    state_str = "忙碌" if c.is_busy() else "空闲"
-                    if c.is_patient: state_str = "病患"
-
-                    job_type = c.job["type"] if c.job else "None"
-                    stage = c.job.get("stage", "") if c.job else ""
-                    path_len = len(c.path)
-                    carry = c.carrying["kind"] if c.carrying else "无"
-                    stuck = c.stuck_timer
-
-                    print(
-                        f"[{c.name}] 状态: {state_str} | 卡死计时: {stuck:.1f}s | 任务: {job_type}({stage}) | 路径: {path_len} | 拿: {carry}")
-
-                    # 如果卡死计时异常，多打印点信息
-                    if stuck > 0.5:
-                        print(f"  --> 警告: {c.name} 似乎卡住了！坐标: {c.current_tile()}")
-
-                # 2. 打印蓝图状态
-                print("--- 蓝图状态 ---")
-                if not buildings.blueprints:
-                    print("没有蓝图")
-                else:
-                    printed_bps = set()
-                    for k, bp in buildings.blueprints.items():
-                        if id(bp) in printed_bps: continue
-                        printed_bps.add(id(bp))
-
-                        missing = bp.missing_materials()
-                        mat_str = "齐了" if not missing else f"缺 {missing}"
-                        print(f"蓝图({bp.tx},{bp.ty}) {bp.kind} | 材料: {mat_str} | 预定者ID: {bp.reserved_by}")
-                print("==================================\n")
+            # 【修改】强制自动寻找任务
+            for c in colonists:
+                if c.is_idle():
+                    c.try_find_job(world, items, stockpiles, buildings, research_mgr, animals, farms.farms)
 
             effects = [ef for ef in effects if ef.update(dt)]
 
@@ -823,6 +728,20 @@ def main():
         # ================= 渲染 =================
         screen.fill(BLACK)
         world.draw(screen, camera)
+        for (tx, ty) in Colonist._designated_harvests:
+            sx, sy = camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
+            # 画一个黄色的虚线框或十字星
+            pygame.draw.rect(screen, (180, 220, 100), (sx + 4, sy + 4, TILE_SIZE - 8, TILE_SIZE - 8), 2,
+                             border_radius=4)
+            # 中间加个小字
+            txt = font_small.render("采", True, (180, 220, 100))
+            screen.blit(txt, (sx + TILE_SIZE // 2 - txt.get_width() // 2, sy + TILE_SIZE // 2 - txt.get_height() // 2))
+
+        stockpiles.draw(screen, camera)
+        farms.draw(screen, camera)
+        buildings.draw_layer(screen, camera, font_small, 0)
+        items.draw(screen, camera, font)
+        buildings.draw_layer(screen, camera, font_small, 1)
         stockpiles.draw(screen, camera)
         farms.draw(screen, camera)
         buildings.draw_layer(screen, camera, font_small, 0)
@@ -831,6 +750,15 @@ def main():
 
         for a in animals:
             a.draw(screen, camera, font)
+            # 【新增】绘制狩猎标记
+            if getattr(a, "is_hunted", False):
+                sx, sy = camera.world_to_screen(a.x, a.y)
+                pygame.draw.circle(screen, (255, 60, 60), (int(sx), int(sy)), a.radius + 6, 2)
+                txt = font_small.render("猎物", True, (255, 60, 60))
+                bg = pygame.Surface((txt.get_width() + 4, txt.get_height() + 2), pygame.SRCALPHA)
+                bg.fill((0, 0, 0, 150))
+                screen.blit(bg, (sx - txt.get_width() // 2 - 2, sy - a.radius - 26))
+                screen.blit(txt, (sx - txt.get_width() // 2, sy - a.radius - 25))
 
         if selected_building:
             sx, sy = camera.world_to_screen(selected_building.tx * TILE_SIZE, selected_building.ty * TILE_SIZE)
@@ -841,8 +769,9 @@ def main():
             sx, sy = camera.world_to_screen(selected_item_stack.x, selected_item_stack.y)
             pygame.draw.circle(screen, (255, 255, 255), (int(sx), int(sy)), TILE_SIZE // 2, 2)
 
-        if mode in ("stockpile", "build", "deconstruct", "farm") and drag_start and drag_end and not pending_farm_rect:
-            x1, y1 = drag_start
+        if mode in ("stockpile", "build", "deconstruct", "farm", "harvest_area",
+                    "hunt_area") and drag_start and drag_end and not pending_farm_rect:
+            x1, y1 = drag_start;
             x2, y2 = drag_end
             tx1, tx2 = min(x1, x2), max(x1, x2)
             ty1, ty2 = min(y1, y2), max(y1, y2)
@@ -856,6 +785,10 @@ def main():
                         s.fill((100, 200, 100, 100))
                     elif mode == "farm":
                         s.fill((60, 180, 60, 100))
+                    elif mode == "harvest_area":
+                        s.fill((180, 220, 100, 80))
+                    elif mode == "hunt_area":
+                        s.fill((220, 100, 150, 80))
                     else:
                         s.fill((255, 50, 50, 80))
                     screen.blit(s, (sx, sy))
@@ -898,13 +831,12 @@ def main():
             screen.blit(shade, (0, 0))
 
         speed_text = "暂停" if game_speed == 0 else f"{int(game_speed)}x"
-        info = (f"{game_time.time_str()} | 速度 {speed_text} | "
-                f"殖民者 {len(colonists)} | 敌人 {len(enemies)} | 动物 {len(animals)}")
+        info = (
+            f"{game_time.time_str()} | 速度 {speed_text} | 殖民者 {len(colonists)} | 敌人 {len(enemies)} | 动物 {len(animals)}")
         screen.blit(font_big.render(info, True, WHITE), (10, 10))
 
         totals = {}
         for s in items.stacks.values(): totals[s.kind] = totals.get(s.kind, 0) + s.amount
-
         seen_totals = set()
         for b in buildings.buildings.values():
             if id(b) in seen_totals: continue
@@ -930,7 +862,7 @@ def main():
         toolbar.draw(screen, screen_w, screen_h, mode)
 
         if selected_colonists:
-            hud.draw(screen, colonists, selected_colonists, camera, auto_work)
+            hud.draw(screen, colonists, selected_colonists, camera)
         elif selected_building:
             bhud.draw(screen, selected_building, totals, research_mgr)
         elif selected_stockpile:
@@ -944,21 +876,18 @@ def main():
             pygame.draw.rect(screen, (100, 200, 100), popup_rect, 2, border_radius=8)
             title = font_big.render("选择种植作物", True, (100, 200, 100))
             screen.blit(title, (popup_rect.centerx - title.get_width() // 2, popup_rect.y + 15))
-
             b_rect = pygame.Rect(screen_w // 2 - 180, screen_h // 2 - 30, 160, 50)
             b_ok = research_mgr.can_plant("berry")
             col = (80, 160, 80) if b_ok else (50, 50, 50)
             pygame.draw.rect(screen, col, b_rect, border_radius=6)
             txt = font.render("浆果 (已解锁)" if b_ok else "浆果 (需基础农业)", True, WHITE)
             screen.blit(txt, (b_rect.centerx - txt.get_width() // 2, b_rect.y + 15))
-
             t_rect = pygame.Rect(screen_w // 2 + 20, screen_h // 2 - 30, 160, 50)
             t_ok = research_mgr.can_plant("tree")
             col = (80, 160, 80) if t_ok else (50, 50, 50)
             pygame.draw.rect(screen, col, t_rect, border_radius=6)
             txt = font.render("树木 (已解锁)" if t_ok else "树木 (需速生树种)", True, WHITE)
             screen.blit(txt, (t_rect.centerx - txt.get_width() // 2, t_rect.y + 15))
-
             c_rect = pygame.Rect(screen_w // 2 - 50, screen_h // 2 + 60, 100, 30)
             pygame.draw.rect(screen, (180, 60, 60), c_rect, border_radius=4)
             txt = font.render("取消", True, WHITE)
@@ -981,14 +910,13 @@ def main():
             help_surf.blit(title, (20, 20))
             keys_text = [
                 "边缘/右键拖拽 : 移动视角",
-                "左键点击 / 框选 : 选中殖民者、建筑、库存区或物品",
-                "右键单击 : 命令 (建造/采集/攻击/狩猎/移动/搬运/取物)",
-                "Shift + 右键 : 将命令加入队列 (依次执行)",
+                "左键点击 / 框选 : 选中",
+                "右键单击 : 命令 (建造/采集/攻击/狩猎/移动/搬运)",
+                "Shift + 右键 : 加入队列",
                 "空格键 : 切换时间流速 (暂停/1x/2x/3x)",
                 "B : 建造菜单   |   F : 划定农业区",
                 "S : 划定库存   |   X : 拆除/删除模式",
                 "R : 建造时旋转 / 开启科技树",
-                "A : 自动工作   |   G : 自动采集",
                 "H / Esc : 打开/关闭此帮助面板",
                 "F11 : 切换全屏模式",
                 "T : 切换 房间美观度 透视"

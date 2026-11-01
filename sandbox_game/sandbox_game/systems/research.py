@@ -5,7 +5,8 @@ TECHS = {
     "herbal_medicine": {"name": "草药学", "cost": 120.0, "desc": "解锁医疗床、无菌医疗设施，以及种植草药。", "requires": ["agriculture"], "unlocks": ["medical_bed", "sterile_material", "plant_medicine"]},
     "smelting": {"name": "粗铁精炼", "cost": 200.0, "desc": "解锁熔炉，可以将粗铁精炼为铁。", "requires": ["stone_masonry"], "unlocks": ["furnace"]},
     "crafting": {"name": "基础锻造", "cost": 250.0, "desc": "解锁铁斧、铁镐、长剑的制作。", "requires": ["smelting"], "unlocks": ["iron_gear"]},
-    "gunsmithing": {"name": "枪械制造", "cost": 400.0, "desc": "解锁枪械制作。", "requires": ["crafting"], "unlocks": ["guns"]}
+    # 修改：枪械制造的前置由 crafting 改为 smelting（只需粗铁精炼即可）
+    "gunsmithing": {"name": "枪械制造", "cost": 400.0, "desc": "解锁枪械制作。", "requires": ["smelting"], "unlocks": ["guns"]}
 }
 
 class ResearchManager:

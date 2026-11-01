@@ -17,8 +17,10 @@ class Enemy:
         self.id = Enemy._id_counter
         self.x, self.y = tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2
         self.name = f"敌人{self.id}"
-        self.hp, self.max_hp = 80, 80
-        self.speed = 3.0 * TILE_SIZE
+        # 削弱：血量 80 -> 50
+        self.hp, self.max_hp = 50, 50
+        # 削弱：速度 3.0 -> 2.4（比小人 3.5 慢，能追上但不容易突脸）
+        self.speed = 2.4 * TILE_SIZE
         self.radius = TILE_SIZE // 2 - 4
 
         # 默认用冷兵器
@@ -27,8 +29,9 @@ class Enemy:
         self.weapon_key = weapon_key
         w = get_weapon(weapon_key)
         self.attack_range = w["range"] * TILE_SIZE
-        self.attack_damage = w["damage"]
-        self.attack_cooldown = w["cooldown"]
+        # 削弱：攻击力打 7 折，冷却延长 40%
+        self.attack_damage = w["damage"] * 0.7
+        self.attack_cooldown = w["cooldown"] * 1.4
         self.cooldown_timer = 0.0
 
         self.path = []
@@ -53,7 +56,6 @@ class Enemy:
         self.hit_flash = max(0, self.hit_flash - dt)
         if self.hp <= 0: return
 
-        # 优先攻击最近殖民者
         if self.target_enemy is None or self.target_enemy.hp <= 0:
             alive_colonists = [c for c in colonists if c.hp > 0]
             if alive_colonists:
@@ -80,24 +82,24 @@ class Enemy:
                     e.take_damage(self.attack_damage, attacker=self)
                     self.cooldown_timer = self.attack_cooldown
                 return
-            elif not self.path:
+
+            # 如果不在攻击范围，且没有路，重新寻路
+            if not self.path:
                 adj = self._find_adjacent(world, self.current_tile(), *e.current_tile())
                 if adj:
                     p = astar(world, self.current_tile(), adj)
                     if p: self.path = p
-            return
 
-        # 没有殖民者就拆建筑，优先找耐久最低的
-        if self.target_building is None or self.target_building.hp <= 0 or self.target_building.marked_for_deconstruction:
-            candidates = [b for b in buildings.buildings.values() if
-                          b.kind in ("wall", "window", "door") and not b.marked_for_deconstruction]
-            if candidates:
-                self.target_building = min(candidates, key=lambda b: (b.hp, (b.tx - self.x / TILE_SIZE) ** 2 + (
-                            b.ty - self.y / TILE_SIZE) ** 2))
-            else:
-                self.target_building = None
+                # 【防卡死】如果找不到去殖民者的路，就砸最近的门或墙
+                if not self.path:
+                    candidates = [b for b in buildings.buildings.values() if
+                                  b.kind in ("wall", "window", "door") and not b.marked_for_deconstruction]
+                    if candidates:
+                        self.target_building = min(candidates, key=lambda b: (b.tx - self.x / TILE_SIZE) ** 2 + (
+                                    b.ty - self.y / TILE_SIZE) ** 2)
 
-        if self.target_building is not None:
+        # 处理砸墙
+        if self.target_building is not None and (not self.path or self.target_enemy is None):
             b = self.target_building
             adj = self._find_adjacent(world, self.current_tile(), b.tx, b.ty)
             if adj:
@@ -121,6 +123,7 @@ class Enemy:
             else:
                 self.target_building = None
 
+        # 移动逻辑
         if self.path:
             target_tx, target_ty = self.path[0]
             tgx, tgy = target_tx * TILE_SIZE + TILE_SIZE / 2, target_ty * TILE_SIZE + TILE_SIZE / 2
@@ -134,6 +137,10 @@ class Enemy:
             else:
                 self.x += dx / dist * step
                 self.y += dy / dist * step
+        else:
+            # 【新增】防卡死：如果既没路又不动，强制重置目标
+            self.target_enemy = None
+            self.path = []
 
     def _find_adjacent(self, world, start, tx, ty):
         cands = [(tx + dx, ty + dy) for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]

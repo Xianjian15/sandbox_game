@@ -1,7 +1,6 @@
 # ui/toolbar.py
 import pygame
 
-
 class Toolbar:
     def __init__(self, font):
         self.font = font
@@ -20,12 +19,14 @@ class Toolbar:
             ("farm", "农业 (F)", (100, 200, 100)),
             ("stockpile", "库存 (S)", (100, 150, 220)),
             ("deconstruct", "拆除 (X)", (220, 100, 100)),
-            ("research", "科技 (R)", (100, 220, 180))
+            ("research", "科技 (R)", (100, 220, 180)),
+            ("harvest_area", "采集", (180, 220, 100)),   # 新增
+            ("hunt_area", "狩猎", (220, 100, 150))       # 新增
         ]
 
         start_x = 20
         for i, (mode_key, label, color) in enumerate(tools):
-            rect = pygame.Rect(start_x + i * 115, y + 8, 105, 44)
+            rect = pygame.Rect(start_x + i * 105, y + 8, 95, 44)
             self.buttons.append((rect, mode_key))
 
             is_selected = (current_mode == mode_key)
