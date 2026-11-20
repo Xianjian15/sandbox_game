@@ -10,21 +10,14 @@ from world.items import ITEM_DEFS
 from combat.weapons import get_weapon, WEAPONS
 from combat.weapon_render import draw_weapon
 
-DEFAULT_PRIORITIES = {"harvest": 2, "haul": 3, "build": 3, "research": 1, "hunt": 3, "farm": 2, "cook": 3, "craft": 3,
-                      "smelt": 3, "doctor": 3}
-
 DEBUG_BUILD = True  # 调试建造流程时打开，定位完关掉
 
 
 class Colonist:
-    _id_counter = 0
-    _reserved_harvests = set()
-    _designated_harvests = set()  # 玩家框选的指定采集区
-    _items_ref, _buildings_ref, _room_mgr_ref, _all_colonists = None, None, None, []
-
-    def __init__(self, tx, ty, name=None, weapon_key="fist"):
-        Colonist._id_counter += 1
-        self.id = Colonist._id_counter
+    def __init__(self, tx, ty, name=None, weapon_key="fist", *, ctx):
+        # ctx：SimContext，持有 id 分配、物品/建筑/房间引用、采集占用集合等共享状态
+        self.ctx = ctx
+        self.id = ctx.next_id()
         # 多人模式：owner_id 表示该小人归属哪个玩家（0 = 玩家1）
         self.owner_id = 0
 
@@ -38,7 +31,6 @@ class Colonist:
         self.radius = TILE_SIZE // 2 - 4
         self.path, self.selected, self.job = [], False, None
         self.work_progress = 0.0
-        self.priorities = dict(DEFAULT_PRIORITIES)
         self.carry_limit, self.carrying = 20, None
         self.satiety, self.rest, self.mood = 100.0, 100.0, 100.0
 
@@ -113,8 +105,8 @@ class Colonist:
         if new_key not in ("stone_pickaxe", "iron_pickaxe"):
             return
         # 如果工具槽已有东西，把它丢到脚下
-        if self.tool_key and Colonist._items_ref:
-            Colonist._items_ref.add(self.tool_key, 1, *self.current_tile())
+        if self.tool_key and self.ctx.items:
+            self.ctx.items.add(self.tool_key, 1, *self.current_tile())
         self.tool_key = new_key
 
     def take_damage(self, amount, attacker=None):
@@ -132,9 +124,9 @@ class Colonist:
 
         beauty = 0
         is_sterile = False
-        if Colonist._room_mgr_ref:
-            beauty = Colonist._room_mgr_ref.get_beauty_at(*self.current_tile())
-            is_sterile = Colonist._room_mgr_ref.is_in_sterile_room(*self.current_tile())
+        if self.ctx.room_mgr:
+            beauty = self.ctx.room_mgr.get_beauty_at(*self.current_tile())
+            is_sterile = self.ctx.room_mgr.is_in_sterile_room(*self.current_tile())
 
         if self.state == "sleeping":
             self.rest += 30.0 * dt
@@ -261,8 +253,8 @@ class Colonist:
         return True
 
     def _wake_up(self):
-        if self.bed_tile and Colonist._buildings_ref:
-            b = Colonist._buildings_ref.get_building_at(self.bed_tile[0], self.bed_tile[1])
+        if self.bed_tile and self.ctx.buildings:
+            b = self.ctx.buildings.get_building_at(self.bed_tile[0], self.bed_tile[1])
             if b and b.occupied_by == self.id: b.occupied_by = None
         self.bed_tile, self.state, self.is_patient = None, None, False
 
@@ -379,7 +371,7 @@ class Colonist:
         self._release_job()
         self.path, self.job = best_p, {"type": "harvest", "tx": tx, "ty": ty, "adjacent": best_t}
         self.work_progress = 0.0
-        Colonist._reserved_harvests.add((tx, ty))
+        self.ctx.reserved_harvests.add((tx, ty))
         return True
 
     def assign_deconstruct(self, world, buildings, tx, ty, layer):
@@ -698,7 +690,7 @@ class Colonist:
         if self.job is not None or self.path or self.state is not None or self.is_patient:
             return False
         if self.carrying:
-            self._drop_food(Colonist._items_ref)
+            self._drop_food(self.ctx.items)
         if self.target_enemy is not None or self.target_animal is not None:
             return False
 
@@ -1075,8 +1067,8 @@ class Colonist:
                 if t in (T_ROCK, T_IRON_ROCK) and tool_def.get("mine_bonus"): dmg *= 2.5
                 done, kind, amt = world.damage_resource(j["tx"], j["ty"], int(dmg))
                 if done:
-                    if (j["tx"], j["ty"]) in Colonist._designated_harvests:
-                        Colonist._designated_harvests.remove((j["tx"], j["ty"]))
+                    if (j["tx"], j["ty"]) in self.ctx.designated_harvests:
+                        self.ctx.designated_harvests.remove((j["tx"], j["ty"]))
                     if items is not None and kind is not None: items.add(kind, amt, j["tx"], j["ty"])
                     self._release_job()
                     break
@@ -1649,19 +1641,19 @@ class Colonist:
                 if farm and (tx, ty) in farm.plots: farm.plots[(tx, ty)]["reserved_by"] = None
             elif self.job.get("type") == "harvest":
                 tx, ty = self.job.get("tx"), self.job.get("ty")
-                if (tx, ty) in Colonist._reserved_harvests: Colonist._reserved_harvests.remove((tx, ty))
+                if (tx, ty) in self.ctx.reserved_harvests: self.ctx.reserved_harvests.remove((tx, ty))
             elif self.job.get("type") == "haul":
                 cab = self.job.get("cabinet")
                 if cab: cab.reserved_by = None
             elif self.job.get("type") == "research":
                 tx, ty = self.job["tx"], self.job["ty"]
-                if Colonist._buildings_ref:
-                    b = Colonist._buildings_ref.get_building_at(tx, ty)
+                if self.ctx.buildings:
+                    b = self.ctx.buildings.get_building_at(tx, ty)
                     if b and b.reserved_by == self.id: b.reserved_by = None
         self.job, self.work_progress, self.path = None, 0.0, []
 
         if self.carrying:
-            self._drop_food(Colonist._items_ref)
+            self._drop_food(self.ctx.items)
 
         if self.state in ("going_to_eat", "going_to_sleep"):
             self.state = None

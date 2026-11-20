@@ -6,11 +6,9 @@ from core.pathfinding import astar
 
 
 class Animal:
-    _id_counter = 0
-
-    def __init__(self, tx, ty, species="rabbit"):
-        Animal._id_counter += 1
-        self.id = Animal._id_counter
+    def __init__(self, tx, ty, species="rabbit", *, ctx):
+        self.ctx = ctx
+        self.id = ctx.next_id()
         self.species = species
         self.x = tx * TILE_SIZE + TILE_SIZE / 2
         self.y = ty * TILE_SIZE + TILE_SIZE / 2

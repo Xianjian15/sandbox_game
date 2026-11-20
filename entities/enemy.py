@@ -1,7 +1,6 @@
 # entities/enemy.py
 import pygame
 import math
-import random
 from settings import TILE_SIZE, WHITE
 from core.pathfinding import astar
 from world.buildings import BUILDING_DEFS
@@ -10,13 +9,11 @@ from combat.weapon_render import draw_weapon
 
 
 class Enemy:
-    _id_counter = 0
-
-    def __init__(self, tx, ty, weapon_key=None):
-        Enemy._id_counter += 1
-        self.id = Enemy._id_counter
+    def __init__(self, tx, ty, weapon_key=None, *, ctx):
+        self.ctx = ctx
+        self.id = ctx.next_id()
         self.x, self.y = tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2
-        self.name = f"敌人{self.id}"
+        self.name = f"敌人{ctx.next_seq('enemy')}"
         # 削弱：血量 80 -> 50
         self.hp, self.max_hp = 50, 50
         # 削弱：速度 3.0 -> 2.4（比小人 3.5 慢，能追上但不容易突脸）
@@ -25,7 +22,7 @@ class Enemy:
 
         # 默认用冷兵器
         if weapon_key is None:
-            weapon_key = random.choice(["club", "spear", "longsword", "fist"])
+            weapon_key = ctx.rng.choice(["club", "spear", "longsword", "fist"])
         self.weapon_key = weapon_key
         w = get_weapon(weapon_key)
         self.attack_range = w["range"] * TILE_SIZE

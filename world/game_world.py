@@ -2,9 +2,10 @@
 import random
 import pygame
 
-from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE
+from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT
 from core.camera import Camera
 from core.time_system import GameTime
+from core.sim_context import SimContext
 from world.world import World
 from world.items import ItemManager, ITEM_DEFS
 from world.stockpile import StockpileManager
@@ -25,7 +26,7 @@ from combat.effects import Shot, MeleeHit, CombatLog
 from systems.research import ResearchManager
 from world.rooms import RoomManager
 
-# 装备类物品：不自动搬运，必须玩家手动指令
+# 装备类物品：默认不允许搬运（需在物品面板打开"允许搬运"）
 EQUIP_KINDS = {"stone_pickaxe", "iron_pickaxe", "axe", "longsword",
                "pistol", "rifle", "gun", "club", "spear"}
 
@@ -37,21 +38,24 @@ class GameWorld:
         self.font_small = font_small
         self.font_warn = font_warn
 
-        self.rng = random.Random(seed if seed is not None else 42)
-        self.seed = seed
+        self.seed = seed if seed is not None else 42
+        self.ctx = SimContext(self.seed)     # 一局游戏的共享模拟状态（id、引用、采集占用集合）
+        self.rng = self.ctx.rng
 
         self.game_time = GameTime(day_length_sec=120.0, start_hour=7.0)
         self.research_mgr = ResearchManager()
 
         self.world = World(MAP_WIDTH, MAP_HEIGHT)
         self.items = ItemManager()
+        self.ctx.items = self.items
         self.stockpiles = StockpileManager()
         self.farms = FarmManager()
         self.buildings = BuildingManager(self.research_mgr)
+        self.ctx.buildings = self.buildings
         self.world.buildings = self.buildings
 
         self.room_mgr = RoomManager(self.world, self.buildings)
-        Colonist._room_mgr_ref = self.room_mgr
+        self.ctx.room_mgr = self.room_mgr
 
         self.camera = Camera(screen_w, screen_h, MAP_WIDTH * TILE_SIZE, MAP_HEIGHT * TILE_SIZE)
         self.camera.x = (MAP_WIDTH * TILE_SIZE - screen_w) / 2
@@ -87,13 +91,10 @@ class GameWorld:
                         break
                 if found: break
             if not found: found = (base_x, base_y)
-            c = Colonist(*found, weapon_key="fist")
+            c = Colonist(*found, weapon_key="fist", ctx=self.ctx)
             c.owner_id = 0
             self.colonists.append(c)
 
-        Colonist._all_colonists = self.colonists
-        Colonist._items_ref = self.items
-        Colonist._buildings_ref = self.buildings
 
         spawn_attempts = 0
         while len(self.animals) < 15 and spawn_attempts < 200:
@@ -105,7 +106,7 @@ class GameWorld:
                     if not self.world.is_walkable(ax + dx, ay + dy):
                         is_safe = False; break
                 if is_safe:
-                    self.animals.append(Animal(ax, ay, random.choice(["rabbit", "rabbit", "deer", "deer", "deer"])))
+                    self.animals.append(Animal(ax, ay, random.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
 
         self.animal_respawn_timer = 10.0
         self.MAX_ANIMALS = 20
@@ -448,7 +449,7 @@ class GameWorld:
                 # 材料：装备类默认不搬，材料照常搬
                 if hit_item.kind in EQUIP_KINDS and not getattr(hit_item, "allow_haul", False):
                     name = ITEM_DEFS.get(hit_item.kind, {}).get("name", hit_item.kind)
-                    self.log.add(f"{name} 未开启自动搬运（在物品面板里开关）", (255, 200, 100))
+                    self.log.add(f"{name} 未开启“允许搬运”（在物品面板里开关）", (255, 200, 100))
                 else:
                     cabinet = None
                     seen_b = set()
@@ -582,7 +583,7 @@ class GameWorld:
                     for ty in range(ty1, ty2 + 1):
                         for tx in range(tx1, tx2 + 1):
                             if self.world.is_harvestable(tx, ty):
-                                Colonist._designated_harvests.add((tx, ty))
+                                self.ctx.designated_harvests.add((tx, ty))
                     self.mode = None
                 elif self.mode == "hunt_area":
                     for a in self.animals:
@@ -686,12 +687,32 @@ class GameWorld:
                 self.warning_text = f"警告: {names} 正在遭受攻击！"
                 self.warning_timer = 2.0
 
-    def step(self, dt, dt_raw):
-        if self.game_speed <= 0:
-            self.log.update(dt_raw)
-            return
+        # —— 以下原本在 step() 末尾：纯 UI / 渲染状态，用真实帧时间，不属于模拟 ——
+        # 选中对象失效时清掉选择
+        if self.selected_building:
+            if hasattr(self.selected_building, "work_done"):
+                if (self.selected_building.tx, self.selected_building.ty,
+                    self.selected_building.layer) not in self.buildings.blueprints:
+                    self.selected_building = None
+            else:
+                if (self.selected_building.tx, self.selected_building.ty,
+                    self.selected_building.layer) not in self.buildings.buildings:
+                    self.selected_building = None
+        if self.selected_item_stack:
+            if self.selected_item_stack.amount <= 0 or \
+               self.selected_item_stack not in self.items.stacks.values():
+                self.selected_item_stack = None
 
-        self.game_time.update(dt)
+        # 特效淡出、战斗日志淡出：渲染用，走真实时间
+        self.effects = [ef for ef in self.effects if ef.update(dt_raw)]
+        self.log.update(dt_raw)
+
+    def sim_step(self):
+        """推进模拟恰好一个 tick。固定步长 TICK_DT，与帧率、倍速、渲染完全无关。
+        由 main 的累加器循环调用；倍速 = 每秒调用的次数，而不是步长。"""
+        dt = TICK_DT
+
+        self.game_time.update()
         self.farms.update(dt)
         self.room_mgr.update(dt)
 
@@ -721,7 +742,7 @@ class GameWorld:
                         if not self.world.is_walkable(ax + dx, ay + dy):
                             is_safe = False; break
                     if is_safe:
-                        self.animals.append(Animal(ax, ay, random.choice(["rabbit", "rabbit", "deer", "deer", "deer"])))
+                        self.animals.append(Animal(ax, ay, random.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
                         break
 
         self.enemy_invasion_timer -= dt
@@ -740,11 +761,12 @@ class GameWorld:
                     else:
                         ex, ey = MAP_WIDTH - 5, random.randint(5, MAP_HEIGHT - 5)
                     if self.world.is_walkable(ex, ey):
-                        self.enemies.append(Enemy(ex, ey, random.choice(["club", "spear", "longsword", "fist"])))
+                        self.enemies.append(Enemy(ex, ey, random.choice(["club", "spear", "longsword", "fist"]), ctx=self.ctx))
                 self.log.add(f"警告：发现 {count} 名敌人入侵！", (255, 50, 50))
                 self.warning_text = f"警告：发现 {count} 名敌人入侵！"
                 self.warning_timer = 3.0
 
+        # 每个 tick 都消费 recent_shot（一帧可能跑多个 tick，留到渲染时再取会丢弹道）
         for c in self.colonists:
             if c.recent_shot is not None:
                 kind, x1, y1, x2, y2, color = c.recent_shot
@@ -766,29 +788,11 @@ class GameWorld:
                     if b and b.occupied_by == c.id:
                         b.occupied_by = None
         self.colonists = [c for c in self.colonists if c.hp > 0]
-        Colonist._all_colonists = self.colonists
 
         for e in self.enemies:
             if e.hp <= 0:
                 self.log.add(f"{e.name} 被击杀", (100, 255, 100))
         self.enemies = [e for e in self.enemies if e.hp > 0]
-
-        if self.selected_building:
-            if hasattr(self.selected_building, "work_done"):
-                if (self.selected_building.tx, self.selected_building.ty,
-                    self.selected_building.layer) not in self.buildings.blueprints:
-                    self.selected_building = None
-            else:
-                if (self.selected_building.tx, self.selected_building.ty,
-                    self.selected_building.layer) not in self.buildings.buildings:
-                    self.selected_building = None
-        if self.selected_item_stack:
-            if self.selected_item_stack.amount <= 0 or \
-               self.selected_item_stack not in self.items.stacks.values():
-                self.selected_item_stack = None
-
-        self.effects = [ef for ef in self.effects if ef.update(dt)]
-        self.log.update(dt_raw)
 
     def draw(self, surface, dt_raw):
         screen_w, screen_h = surface.get_size()
@@ -796,7 +800,7 @@ class GameWorld:
 
         surface.fill(BLACK)
         self.world.draw(surface, self.camera)
-        for (tx, ty) in Colonist._designated_harvests:
+        for (tx, ty) in self.ctx.designated_harvests:
             sx, sy = self.camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
             pygame.draw.rect(surface, (180, 220, 100),
                              (sx + 4, sy + 4, TILE_SIZE - 8, TILE_SIZE - 8), 2, border_radius=4)

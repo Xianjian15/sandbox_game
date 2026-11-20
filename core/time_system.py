@@ -1,5 +1,6 @@
 # core/time_system.py
 import math
+from settings import TICK_DT
 
 
 class GameTime:
@@ -7,7 +8,12 @@ class GameTime:
     def __init__(self, day_length_sec=120.0, start_hour=6.0):
         self.day_length_sec = day_length_sec
         self.start_hour = start_hour
-        self.elapsed = 0.0
+        self.tick = 0   # 整数 tick 计数：唯一的时间来源，没有浮点累加误差
+
+    @property
+    def elapsed(self):
+        """已流逝的游戏秒数：由整数 tick 直接算出，不累加。"""
+        return self.tick * TICK_DT
 
     @property
     def day(self):
@@ -46,5 +52,6 @@ class GameTime:
         m = int((self.hour - h) * 60)
         return f"第{self.day}天 {h:02d}:{m:02d}"
 
-    def update(self, dt):
-        self.elapsed += dt
+    def update(self):
+        """推进一个 tick（固定步长）。"""
+        self.tick += 1

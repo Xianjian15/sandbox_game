@@ -89,7 +89,7 @@ class ItemHUD:
         col = (80, 160, 80) if allow else (80, 80, 90)
         pygame.draw.rect(surface, col, self.haul_btn, border_radius=4)
         pygame.draw.rect(surface, (200, 200, 200), self.haul_btn, 1, border_radius=4)
-        txt = f"自动搬运: {'开' if allow else '关'}"
+        txt = f"允许搬运: {'开' if allow else '关'}"
         surf = self.font.render(txt, True, WHITE)
         surface.blit(surf, (self.haul_btn.centerx - surf.get_width() // 2,
                             self.haul_btn.y + 5))

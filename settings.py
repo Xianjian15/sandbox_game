@@ -24,3 +24,9 @@ RED = (200, 60, 60)
 GREEN = (60, 200, 60)
 YELLOW = (230, 200, 60)
 GRAY = (120, 120, 120)
+
+# ---- 固定步长模拟（锁步联机的基础）----
+# 模拟永远以 TICK_DT 为单位推进，与帧率、倍速无关；倍速 = 每秒多跑几个 tick。
+TICK_RATE = 60
+TICK_DT = 1.0 / TICK_RATE
+MAX_TICKS_PER_FRAME = 8   # 单帧最多补多少个 tick，防止卡顿后越补越卡

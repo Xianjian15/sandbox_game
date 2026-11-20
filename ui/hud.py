@@ -7,8 +7,7 @@ from combat.weapons import get_weapon
 class HUD:
     def __init__(self, font):
         self.font = font
-        self.panel_rect = pygame.Rect(10, 60, 320, 500)
-        self.rects = {}
+        self.panel_rect = pygame.Rect(10, 60, 320, 190)
 
     def draw(self, surface, colonists, selected_colonists, camera):
         if not selected_colonists: return
@@ -35,46 +34,12 @@ class HUD:
         if getattr(c, "bleeding", 0) > 0:
             surface.blit(self.font.render(f"流血: {c.bleeding:.1f}/s", True, (255, 80, 80)), (x + 170, y + 65))
 
-        surface.blit(self.font.render("工作优先级 (点击调整):", True, (200, 200, 100)), (x + 10, y + 100))
-
-        self.rects.clear()
-        job_names = {
-            "harvest": "采集", "haul": "搬运", "build": "建造", "research": "研究",
-            "hunt": "狩猎", "farm": "农业", "cook": "烹饪", "craft": "制作",
-            "smelt": "熔炼", "doctor": "医疗"
-        }
-
-        row = 0
-        for job_key, job_name in job_names.items():
-            col = row % 3
-            line = row // 3
-            bx = x + 10 + col * 100
-            by = y + 125 + line * 30
-
-            prio = c.priorities.get(job_key, 0)
-            if prio == 0:
-                color = (120, 120, 120)
-            elif prio == 1:
-                color = (50, 200, 50)
-            elif prio == 2:
-                color = (100, 255, 100)
-            elif prio == 3:
-                color = (255, 200, 80)
-            else:
-                color = (255, 80, 80)
-
-            txt = self.font.render(f"{job_name}: {prio}", True, color)
-            surface.blit(txt, (bx, by))
-
-            self.rects[(bx - 5, by - 2, 90, 24)] = (job_key, selected_colonists)
-            row += 1
-
-        # 双槽装备栏（在 for 循环外）
+        # 双槽装备栏
         weapon = get_weapon(c.weapon_key)
         tool_key = getattr(c, "tool_key", None)
         tool_def = get_weapon(tool_key) if tool_key else None
 
-        wy = y + 260
+        wy = y + 105
         surface.blit(self.font.render("武器槽:", True, (200, 200, 200)), (x + 10, wy))
         wx, ww, wh = x + 80, 220, 26
         pygame.draw.rect(surface, (40, 50, 40), (wx, wy - 2, ww, wh), border_radius=4)
@@ -99,13 +64,6 @@ class HUD:
         surface.blit(self.font.render(str(int(value)), True, WHITE), (x + w + 5, y))
 
     def handle_click(self, mouse_pos, selected_colonists):
+        """面板只做展示；点击落在面板内时吞掉，避免穿透到地图。"""
         if not selected_colonists: return False
-        if self.panel_rect.collidepoint(mouse_pos):
-            for rect, (job_key, targets) in self.rects.items():
-                if pygame.Rect(rect).collidepoint(mouse_pos):
-                    current = targets[0].priorities.get(job_key, 0)
-                    new_prio = (current + 1) % 5
-                    for c in targets: c.priorities[job_key] = new_prio
-                    return True
-            return True
-        return False
+        return self.panel_rect.collidepoint(mouse_pos)
