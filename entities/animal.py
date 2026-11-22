@@ -1,6 +1,5 @@
 # entities/animal.py
 import pygame
-import random
 from settings import TILE_SIZE
 from core.pathfinding import astar
 
@@ -33,7 +32,9 @@ class Animal:
             self.drop_amount = 5  # 提高掉落量
 
         self.path = []
-        self.idle_timer = random.uniform(1.0, 3.0)
+        # 实体私有随机流：由世界种子和实体 id 派生，别处增减随机调用不会打乱它
+        self.rng = ctx.entity_rng(self.id)
+        self.idle_timer = self.rng.uniform(1.0, 3.0)
         self.hit_flash = 0.0
         self.fleeing_timer = 0.0
 
@@ -59,18 +60,18 @@ class Animal:
 
         if self.fleeing_timer > 0:
             self.fleeing_timer -= dt
-            if not self.path and random.random() < 0.1:
+            if not self.path and self.rng.random() < 0.1:
                 cx, cy = self.current_tile()
-                dx, dy = random.choice([(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)])
+                dx, dy = self.rng.choice([(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)])
                 target = (cx + dx * 10, cy + dy * 10)
                 p = astar(world, (cx, cy), target, max_iter=500)
                 if p: self.path = p
         else:
             self.idle_timer -= dt
             if self.idle_timer <= 0 and not self.path:
-                self.idle_timer = random.uniform(2.0, 5.0)
+                self.idle_timer = self.rng.uniform(2.0, 5.0)
                 cx, cy = self.current_tile()
-                dx, dy = random.choice([(-2, 0), (2, 0), (0, -2), (0, 2)])
+                dx, dy = self.rng.choice([(-2, 0), (2, 0), (0, -2), (0, 2)])
                 p = astar(world, (cx, cy), (cx + dx, cy + dy), max_iter=100)
                 if p: self.path = p
 

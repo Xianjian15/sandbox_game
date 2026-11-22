@@ -32,7 +32,7 @@ EQUIP_KINDS = {"stone_pickaxe", "iron_pickaxe", "axe", "longsword",
 
 
 class GameWorld:
-    def __init__(self, font, font_big, font_small, font_warn, screen_w, screen_h, seed=None):
+    def __init__(self, font, font_big, font_small, font_warn, screen_w, screen_h, seed=None, map_seed=None):
         self.font = font
         self.font_big = font_big
         self.font_small = font_small
@@ -45,7 +45,10 @@ class GameWorld:
         self.game_time = GameTime(day_length_sec=120.0, start_hour=7.0)
         self.research_mgr = ResearchManager()
 
-        self.world = World(MAP_WIDTH, MAP_HEIGHT)
+        # 地形生成使用独立的随机流（默认由游戏种子决定）。
+        # 传 map_seed=7 可以精确复现旧版（硬编码 random.seed(7)）的地图。
+        self.map_seed = map_seed if map_seed is not None else self.seed
+        self.world = World(MAP_WIDTH, MAP_HEIGHT, random.Random(self.map_seed))
         self.items = ItemManager()
         self.ctx.items = self.items
         self.stockpiles = StockpileManager()
@@ -99,14 +102,14 @@ class GameWorld:
         spawn_attempts = 0
         while len(self.animals) < 15 and spawn_attempts < 200:
             spawn_attempts += 1
-            ax, ay = random.randint(5, MAP_WIDTH - 5), random.randint(5, MAP_HEIGHT - 5)
+            ax, ay = self.rng.randint(5, MAP_WIDTH - 5), self.rng.randint(5, MAP_HEIGHT - 5)
             if self.world.is_walkable(ax, ay):
                 is_safe = True
                 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
                     if not self.world.is_walkable(ax + dx, ay + dy):
                         is_safe = False; break
                 if is_safe:
-                    self.animals.append(Animal(ax, ay, random.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
+                    self.animals.append(Animal(ax, ay, self.rng.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
 
         self.animal_respawn_timer = 10.0
         self.MAX_ANIMALS = 20
@@ -791,33 +794,33 @@ class GameWorld:
         if self.animal_respawn_timer <= 0 and len(self.animals) < self.MAX_ANIMALS:
             self.animal_respawn_timer = 15.0
             for _ in range(20):
-                ax, ay = random.randint(5, MAP_WIDTH - 5), random.randint(5, MAP_HEIGHT - 5)
+                ax, ay = self.rng.randint(5, MAP_WIDTH - 5), self.rng.randint(5, MAP_HEIGHT - 5)
                 if self.world.is_walkable(ax, ay):
                     is_safe = True
                     for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
                         if not self.world.is_walkable(ax + dx, ay + dy):
                             is_safe = False; break
                     if is_safe:
-                        self.animals.append(Animal(ax, ay, random.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
+                        self.animals.append(Animal(ax, ay, self.rng.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
                         break
 
         self.enemy_invasion_timer -= dt
         if self.enemy_invasion_timer <= 0:
             self.enemy_invasion_timer = self.game_time.day_length_sec * 3
-            if random.random() < 0.5:
-                count = random.randint(1, 3)
+            if self.rng.random() < 0.5:
+                count = self.rng.randint(1, 3)
                 for _ in range(count):
-                    side = random.randint(0, 3)
+                    side = self.rng.randint(0, 3)
                     if side == 0:
-                        ex, ey = random.randint(5, MAP_WIDTH - 5), 5
+                        ex, ey = self.rng.randint(5, MAP_WIDTH - 5), 5
                     elif side == 1:
-                        ex, ey = random.randint(5, MAP_WIDTH - 5), MAP_HEIGHT - 5
+                        ex, ey = self.rng.randint(5, MAP_WIDTH - 5), MAP_HEIGHT - 5
                     elif side == 2:
-                        ex, ey = 5, random.randint(5, MAP_HEIGHT - 5)
+                        ex, ey = 5, self.rng.randint(5, MAP_HEIGHT - 5)
                     else:
-                        ex, ey = MAP_WIDTH - 5, random.randint(5, MAP_HEIGHT - 5)
+                        ex, ey = MAP_WIDTH - 5, self.rng.randint(5, MAP_HEIGHT - 5)
                     if self.world.is_walkable(ex, ey):
-                        self.enemies.append(Enemy(ex, ey, random.choice(["club", "spear", "longsword", "fist"]), ctx=self.ctx))
+                        self.enemies.append(Enemy(ex, ey, self.rng.choice(["club", "spear", "longsword", "fist"]), ctx=self.ctx))
                 self.log.add(f"警告：发现 {count} 名敌人入侵！", (255, 50, 50))
                 self.warning_text = f"警告：发现 {count} 名敌人入侵！"
                 self.warning_timer = 3.0
@@ -839,6 +842,8 @@ class GameWorld:
         for c in self.colonists:
             if c.hp <= 0:
                 self.log.add(f"{c.name} 倒下了！", (255, 80, 80))
+                c._release_job()      # 否则他占着的柜子/工作台/蓝图会永远被占用
+                c.queue.clear()
                 if c.bed_tile is not None:
                     b = self.buildings.get_building_at(c.bed_tile[0], c.bed_tile[1])
                     if b and b.occupied_by == c.id:

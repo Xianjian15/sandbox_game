@@ -1,6 +1,5 @@
 # world/world.py
 import pygame
-import random
 import math
 from settings import *
 
@@ -10,8 +9,11 @@ HARVESTABLE = {T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK}
 
 
 class World:
-    def __init__(self, cols, rows):
+    def __init__(self, cols, rows, rng):
+        # rng：专用于地形生成的 random.Random 实例（由 GameWorld 按种子创建），
+        # 不再使用全局 random，也不再 random.seed(7) 污染全局随机流。
         self.cols, self.rows = cols, rows
+        self.rng = rng
         self.tiles = [[T_GRASS for _ in range(cols)] for _ in range(rows)]
         self.buildings = None
         self._generate()
@@ -29,22 +31,22 @@ class World:
                     self.resource_hp[(c, r)] = 30
 
     def _generate(self):
-        random.seed(7)
+        rng = self.rng
         # 随机地形和树、石头
         for _ in range(120):
-            cx, cy = random.randint(0, self.cols - 1), random.randint(0, self.rows - 1)
-            r, t = random.randint(2, 5), random.choice([T_ROCK, T_TREE, T_DIRT])
+            cx, cy = rng.randint(0, self.cols - 1), rng.randint(0, self.rows - 1)
+            r, t = rng.randint(2, 5), rng.choice([T_ROCK, T_TREE, T_DIRT])
             for y in range(max(0, cy - r), min(self.rows, cy + r)):
                 for x in range(max(0, cx - r), min(self.cols, cx + r)):
-                    if (x - cx) ** 2 + (y - cy) ** 2 <= r * r and random.random() < 0.75:
+                    if (x - cx) ** 2 + (y - cy) ** 2 <= r * r and rng.random() < 0.75:
                         self.tiles[y][x] = t
 
         # 生成铁矿脉
         for _ in range(8):
-            cx, cy = random.randint(0, self.cols - 1), random.randint(0, self.rows - 1)
+            cx, cy = rng.randint(0, self.cols - 1), rng.randint(0, self.rows - 1)
             for y in range(max(0, cy - 1), min(self.rows, cy + 2)):  # 范围从 5 改成了 3x3 的区域
                 for x in range(max(0, cx - 1), min(self.cols, cx + 2)):
-                    if (x - cx) ** 2 + (y - cy) ** 2 <= 2 and random.random() < 0.7:  # 密集度略微降低
+                    if (x - cx) ** 2 + (y - cy) ** 2 <= 2 and rng.random() < 0.7:  # 密集度略微降低
                         self.tiles[y][x] = T_IRON_ROCK
 
         # 河流
@@ -60,9 +62,9 @@ class World:
         for y in range(max(0, spawn_cy - 8), min(self.rows, spawn_cy + 9)):
             for x in range(max(0, spawn_cx - 8), min(self.cols, spawn_cx + 9)):
                 if (x - spawn_cx) ** 2 + (y - spawn_cy) ** 2 <= 64:
-                    if random.random() < 0.1:
+                    if rng.random() < 0.1:
                         self.tiles[y][x] = T_TREE
-                    elif random.random() < 0.15:
+                    elif rng.random() < 0.15:
                         self.tiles[y][x] = T_BERRY
                     else:
                         self.tiles[y][x] = T_GRASS

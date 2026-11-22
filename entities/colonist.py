@@ -1663,6 +1663,12 @@ class Colonist:
                 if self.ctx.buildings:
                     b = self.ctx.buildings.get_building_at(tx, ty)
                     if b and b.reserved_by == self.id: b.reserved_by = None
+            # 通用兜底：任何任务在"存放"阶段占着的目标柜子，被打断时都要放手。
+            # 以前只有 cook/craft/smelt 会放，"取物"等任务被打断后柜子会永远处于被占用状态，
+            # 导致别人既存不进东西、也取不出食物。
+            tgt = self.job.get("target_obj")
+            if tgt is not None and getattr(tgt, "reserved_by", None) == self.id:
+                tgt.reserved_by = None
         self.job, self.work_progress, self.path = None, 0.0, []
 
         if self.carrying:
