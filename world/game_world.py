@@ -352,6 +352,24 @@ class GameWorld:
                 self.mode = "research" if self.mode != "research" else None
             return
 
+    def _command_station(self, selected, shift_held, station, cmd, assign, fail_msg):
+        """对工作站类建筑（研究台 / 烹饪台 / 熔炉）下指令：
+        普通右键 = 立刻去做（打断当前任务）；Shift+右键 = 排进队列。"""
+        if shift_held:
+            for c in selected: c.enqueue_command(cmd)
+            return
+        for c in selected:
+            c._release_job(); c.queue.clear(); c.state = None
+            c.target_enemy = None; c.target_animal = None
+        # 设施还被别的小人占着：让对方放手，避免两人同时用
+        if station.reserved_by is not None and station.reserved_by != selected[0].id:
+            for c2 in self.colonists:
+                if c2.id == station.reserved_by:
+                    c2._release_job(); break
+            station.reserved_by = None
+        if not assign(selected[0]):
+            self.log.add(fail_msg, (255, 100, 100))
+
     def _handle_right_click(self, pos, shift_held):
         selected = [c for c in self.colonists if c.selected and c.hp > 0]
         if not selected: return
@@ -413,6 +431,44 @@ class GameWorld:
                     selected[0].assign_craft(self.world, self.items, self.stockpiles, self.buildings, bench)
                 else:
                     for c in selected: c.enqueue_command(cmd)
+            else:
+                self.log.add("工作台没有制作任务：请先点选它，在面板里添加", (255, 200, 100))
+
+        elif building_here and building_here.kind == "research_bench":
+            bench = building_here
+            if not self.research_mgr.current_research:
+                self.log.add("请先在科技菜单（R）选择研究项目", (255, 200, 100))
+            else:
+                cmd = {"type": "research", "world": self.world, "buildings": self.buildings,
+                       "tx": bench.tx, "ty": bench.ty, "layer": bench.layer}
+                self._command_station(
+                    selected, shift_held, bench, cmd,
+                    lambda c: c.assign_research(self.world, self.buildings, bench.tx, bench.ty, bench.layer),
+                    "无法前往研究台（路被堵住了？）")
+
+        elif building_here and building_here.kind == "stove":
+            stove = building_here
+            if not stove.cook_queue:
+                self.log.add("烹饪台没有任务：请先点选它，在面板里添加", (255, 200, 100))
+            else:
+                cmd = {"type": "cook", "world": self.world, "items": self.items,
+                       "stockpiles": self.stockpiles, "buildings": self.buildings, "stove": stove}
+                self._command_station(
+                    selected, shift_held, stove, cmd,
+                    lambda c: c.assign_cook(self.world, self.items, self.stockpiles, self.buildings, stove),
+                    "无法开始烹饪：库存区/柜子里没有可用食材，或到不了烹饪台")
+
+        elif building_here and building_here.kind == "furnace":
+            furnace = building_here
+            if not furnace.smelt_queue:
+                self.log.add("熔炉没有任务：请先点选它，在面板里添加", (255, 200, 100))
+            else:
+                cmd = {"type": "smelt", "world": self.world, "items": self.items,
+                       "stockpiles": self.stockpiles, "buildings": self.buildings, "furnace": furnace}
+                self._command_station(
+                    selected, shift_held, furnace, cmd,
+                    lambda c: c.assign_smelt(self.world, self.items, self.stockpiles, self.buildings, furnace),
+                    "无法开始熔炼：库存区/柜子里没有粗铁，或到不了熔炉")
 
         # 【关键修复】蓝图优先于物品：站在地板上右键蓝图时，脚下的散落材料不该抢走指令
         elif blueprints_here:

@@ -132,7 +132,12 @@ class ItemManager:
             self.stacks[key] = ItemStack(kind, amount, tx, ty)
 
     def remove_at(self, tx, ty):
+        """清空整格上的所有物品（仅用于整格清理）。取走某一种物品用 remove_stack。"""
         for k in [k for k in self.stacks if k[0] == tx and k[1] == ty]: del self.stacks[k]
+
+    def remove_stack(self, tx, ty, kind):
+        """只删除这一格上某一种物品的堆叠，不碰同格的其他物品。"""
+        self.stacks.pop((tx, ty, kind), None)
 
     def get_at(self, tx, ty):
         return [s for s in self.stacks.values() if s.tx == tx and s.ty == ty]

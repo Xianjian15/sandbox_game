@@ -464,7 +464,10 @@ class Colonist:
             return True
 
     def assign_research(self, world, buildings, tx, ty, layer):
-        adj = self._find_adjacent(world, self.current_tile(), tx, ty)
+        b = buildings.get_building_at(tx, ty)
+        # 研究台是 2x2：站位按整个占地范围的四周找，而不是只看左上角那一格的 8 邻域
+        adj = self._find_adjacent_for_build(world, self.current_tile(), b) if b else None
+        if not adj: adj = self._find_adjacent(world, self.current_tile(), tx, ty)
         if not adj and world.is_walkable(tx, ty): adj = (tx, ty)
         if not adj: return False
         p = astar(world, self.current_tile(), adj)
@@ -599,7 +602,7 @@ class Colonist:
                 if p is not None:
                     self._release_job()
                     self.path = p
-                    self.job = {"type": "smelt", "furnace": furnace}
+                    self.job = {"type": "smelt", "furnace": furnace, "stage": "deliver"}
                     furnace.reserved_by = self.id
                     return True
         src = self._find_material_source(items, stockpiles, buildings, {"iron_ore": 2})
@@ -681,6 +684,15 @@ class Colonist:
             elif cmd["type"] == "equip_from_ground":
                 if self.assign_equip_from_ground(cmd["world"], cmd["items"], cmd["tx"], cmd["ty"],
                                                  cmd["kind"]): return True
+            elif cmd["type"] == "research":
+                if self.assign_research(cmd["world"], cmd["buildings"], cmd["tx"], cmd["ty"],
+                                        cmd["layer"]): return True
+            elif cmd["type"] == "cook":
+                if self.assign_cook(cmd["world"], cmd["items"], cmd["stockpiles"], cmd["buildings"],
+                                    cmd["stove"]): return True
+            elif cmd["type"] == "smelt":
+                if self.assign_smelt(cmd["world"], cmd["items"], cmd["stockpiles"], cmd["buildings"],
+                                     cmd["furnace"]): return True
         return False
 
     def _retry_build(self, world, buildings, items, stockpiles):
@@ -901,7 +913,7 @@ class Colonist:
                 if food_stack:
                     food_kind = food_stack.kind
                     food_stack.amount -= 1
-                    if food_stack.amount <= 0: items.remove_at(tx, ty)
+                    if food_stack.amount <= 0: items.remove_stack(tx, ty, food_stack.kind)
             if not food_kind: self.state = None; return
             self.state, self.state_timer = "eating", 0.8
             if food_kind == "meal_fine":
@@ -950,7 +962,7 @@ class Colonist:
                                 for s in items.get_at(src_tx, src_ty):
                                     if s.kind == "medicine":
                                         s.amount -= 1
-                                        if s.amount <= 0: items.remove_at(src_tx, src_ty)
+                                        if s.amount <= 0: items.remove_stack(src_tx, src_ty, s.kind)
                                         break
                             patient.hp = min(patient.max_hp, patient.hp + 30)
                             patient.bleeding = 0.0
@@ -970,7 +982,7 @@ class Colonist:
                     for s in items.get_at(j["tx"], j["ty"]):
                         if s.kind == j["kind"]:
                             s.amount -= 1
-                            if s.amount <= 0: items.remove_at(j["tx"], j["ty"])
+                            if s.amount <= 0: items.remove_stack(j["tx"], j["ty"], s.kind)
                             found = True
                             break
                     if found:
@@ -1101,14 +1113,15 @@ class Colonist:
                     items.add(k, max(1, v // 2), tx, ty)
                 buildings.remove_building(tx, ty, layer)
                 self._release_job()
-            elif jt == "research":
-                b = buildings.get_building_at(j["tx"], j["ty"])
-                if not b or b.marked_for_deconstruction or not research or not research.current_research:
-                    self._release_job()
-                    return
-                self.work_progress += self.work_speed * dt
-                # 研究速度按基础 30 计算，不随 1.5x 变化
-                research.add_progress(30.0 * 0.1 * dt)
+
+        elif jt == "research":
+            b = buildings.get_building_at(j["tx"], j["ty"])
+            if not b or b.marked_for_deconstruction or not research or not research.current_research:
+                self._release_job()
+                return
+            self.work_progress += self.work_speed * dt
+            # 研究速度按基础 30 计算，不随 1.5x 变化
+            research.add_progress(30.0 * 0.1 * dt)
 
         elif jt == "cook":
             stove = j["stove"]
@@ -1127,7 +1140,7 @@ class Colonist:
                         for s in items.get_at(tx, ty):
                             if s.kind == kind:
                                 s.amount -= 1
-                                if s.amount <= 0: items.remove_at(tx, ty)
+                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
                                 found = True
                                 break
                     if not found: self._release_job(); return
@@ -1247,7 +1260,7 @@ class Colonist:
                         for s in items.get_at(tx, ty):
                             if s.kind == kind:
                                 s.amount -= 1
-                                if s.amount <= 0: items.remove_at(tx, ty)
+                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
                                 found = True
                                 break
                     if not found: self._release_job(); return
@@ -1370,7 +1383,7 @@ class Colonist:
                                 take = min(s.amount, 2 - cnt)
                                 s.amount -= take
                                 cnt += take
-                                if s.amount <= 0: items.remove_at(tx, ty)
+                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
                         found = cnt > 0
                     if not found: self._release_job(); return
                     if not self.carrying: self.carrying = {"kind": "iron_ore", "amount": 2}
@@ -1416,7 +1429,7 @@ class Colonist:
                             if take > 0:
                                 s.amount -= take
                                 self.carrying["amount"] += take
-                                if s.amount <= 0: items.remove_at(tx, ty)
+                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
                             if self.carrying["amount"] >= self.carry_limit: break
 
                     if self.carrying["amount"] == 0:
@@ -1503,7 +1516,7 @@ class Colonist:
                             if s.kind == mat_kind:
                                 take = min(s.amount, target_take - total_taken)
                                 s.amount -= take
-                                if s.amount <= 0: items.remove_at(tx, ty)
+                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
                                 total_taken += take
                                 if total_taken >= target_take: break
                     if total_taken == 0:
