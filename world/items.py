@@ -1,6 +1,7 @@
 # world/items.py (只需替换 ItemStack 的 draw 函数，为了保险，完整文件如下)
 import pygame
 import math
+import zlib
 from settings import TILE_SIZE
 
 ITEM_DEFS = {
@@ -29,8 +30,10 @@ class ItemStack:
         self.tx = tx
         self.ty = ty
         self.reserved_by = None
-        self._jitter_x = (hash((tx, ty, kind)) % 10) - 5
-        self._jitter_y = (hash((tx, ty, kind, 1)) % 10) - 5
+        # 绘制/点选用的小偏移。注意不能用内置 hash()：字符串的哈希每次启动都不同
+        # （PYTHONHASHSEED），两端会得到不同的偏移，点选到的物品就会不一致。
+        self._jitter_x = (zlib.crc32(f"{tx},{ty},{kind},x".encode()) % 10) - 5
+        self._jitter_y = (zlib.crc32(f"{tx},{ty},{kind},y".encode()) % 10) - 5
         self.allow_haul = False
 
     @property

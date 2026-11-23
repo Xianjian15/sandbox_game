@@ -35,6 +35,16 @@ class SimContext:
         self._seq[kind] = self._seq.get(kind, 0) + 1
         return self._seq[kind]
 
+    def snapshot(self):
+        """供状态哈希使用：id 计数、各种序号、随机流状态、占用集合。"""
+        return {
+            "next_id": self._next_id,
+            "seq": sorted(self._seq.items()),
+            "rng": self.rng.getstate(),
+            "reserved_harvests": sorted(self.reserved_harvests),
+            "designated_harvests": sorted(self.designated_harvests),
+        }
+
     def entity_rng(self, entity_id):
         """实体私有随机流（第 3 步使用）：由 seed 和实体 id 派生，
         新增/删减别处的随机调用不会打乱它的序列。"""

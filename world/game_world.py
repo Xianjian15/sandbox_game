@@ -766,6 +766,16 @@ class GameWorld:
         self.effects = [ef for ef in self.effects if ef.update(dt_raw)]
         self.log.update(dt_raw)
 
+    def state_hash(self):
+        """整个模拟状态的短哈希：联机时两端定期比对，不一致即分叉。"""
+        from core.state_hash import world_hash
+        return world_hash(self)
+
+    def state_sections(self):
+        """分区摘要，用来定位分叉发生在哪一块（小人/动物/物品……）。"""
+        from core.state_hash import world_sections
+        return world_sections(self)
+
     def sim_step(self):
         """推进模拟恰好一个 tick。固定步长 TICK_DT，与帧率、倍速、渲染完全无关。
         由 main 的累加器循环调用；倍速 = 每秒调用的次数，而不是步长。"""

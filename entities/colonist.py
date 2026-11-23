@@ -10,6 +10,8 @@ from world.items import ITEM_DEFS
 from combat.weapons import get_weapon, WEAPONS
 from combat.weapon_render import draw_weapon
 
+FOOD_KINDS = ("meal_fine", "meal_simple", "food", "meat")   # 能直接吃的东西
+
 DEBUG_BUILD = True  # 调试建造流程时打开，定位完关掉
 
 
@@ -227,6 +229,19 @@ class Colonist:
             return None
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
+
+    def _apply_food_effect(self, food_kind):
+        """吃下一份食物：恢复饱食度/心情。"""
+        if food_kind == "meal_fine":
+            self.satiety = min(100, self.satiety + 100)
+            self.mood = min(100, self.mood + 15)
+        elif food_kind == "meal_simple":
+            self.satiety = min(100, self.satiety + 50)
+            self.mood = min(100, self.mood + 5)
+        elif food_kind == "meat":
+            self.satiety = min(100, self.satiety + 15)
+        else:
+            self.satiety = min(100, self.satiety + 10)
 
     def _go_eat(self, world, items, food_info, buildings):
         tx, ty, b = food_info
@@ -916,16 +931,7 @@ class Colonist:
                     if food_stack.amount <= 0: items.remove_stack(tx, ty, food_stack.kind)
             if not food_kind: self.state = None; return
             self.state, self.state_timer = "eating", 0.8
-            if food_kind == "meal_fine":
-                self.satiety = min(100, self.satiety + 100)
-                self.mood = min(100, self.mood + 15)
-            elif food_kind == "meal_simple":
-                self.satiety = min(100, self.satiety + 50)
-                self.mood = min(100, self.mood + 5)
-            elif food_kind == "meat":
-                self.satiety = min(100, self.satiety + 15)
-            else:
-                self.satiety = min(100, self.satiety + 10)
+            self._apply_food_effect(food_kind)
             return
         if self.state == "going_to_sleep": self.state = "sleeping"
 
@@ -1035,9 +1041,21 @@ class Colonist:
                                         items.add(kind, take_amt - 1, *self.current_tile())
                                     self._release_job()
                                     return
-                        self.carrying = {"kind": kind, "amount": take_amt}
-                        j["stage"] = "storing"
-                        self._find_storage_target(world, items, stockpiles, buildings, j)
+                        # "取出"就是真的取出来：食物当场吃（饱食度 ≤ 90 时才吃，吃到接近饱为止），吃不完的和其他物品
+                        # 一律放在小人脚下（柜子旁边的地上）。不再"拿出来又存回柜子"。
+                        left = take_amt
+                        if kind in FOOD_KINDS:
+                            ate = 0
+                            while left > 0 and self.satiety <= 90:   # 饱食度 90 以下才会吃，避免浪费
+                                self._apply_food_effect(kind)
+                                left -= 1
+                                ate += 1
+                            if ate:
+                                self.state, self.state_timer = "eating", 0.8 * ate
+                        if left > 0 and items is not None:
+                            items.add(kind, left, *self.current_tile())
+                        self._release_job()
+                        return
                 else:
                     self._release_job()
             elif j["stage"] == "storing":

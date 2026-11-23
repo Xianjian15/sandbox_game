@@ -123,7 +123,8 @@ class BuildingHUD:
                             else:
                                 self.last_action = ("take", kind, selected_building.inventory.get(kind, 0))
                             self.active_input = None
-                            return True, None
+                            # 必须把动作返回给 game_world，否则"取出"按钮点了没有任何效果
+                            return True, self.last_action
 
                 for k, rect in self.input_rects.items():
                     if rect.collidepoint(mouse_pos):
