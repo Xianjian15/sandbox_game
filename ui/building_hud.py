@@ -3,6 +3,7 @@ import pygame
 from settings import WHITE
 from world.buildings import BUILDING_DEFS
 from world.items import ITEM_DEFS
+from core import commands as cmdlib
 
 
 class BuildingHUD:
@@ -23,6 +24,11 @@ class BuildingHUD:
 
         self.take_input_rects = {}
         self.take_btn_rects = {}
+        self.emit = lambda cmd: None   # 由 GameWorld 接上：面板只"发指令"，不直接改模拟状态
+
+    @staticmethod
+    def _pos(b):
+        return {"tx": b.tx, "ty": b.ty, "layer": b.layer}
 
     def get_counts(self, selected_building):
         counts = {"meal_simple": 0, "meal_fine": 0}
@@ -36,14 +42,14 @@ class BuildingHUD:
 
         if selected_building.kind == "stove":
             counts = self.get_counts(selected_building)
+            n = counts.get(self.active_input, 0)
             try:
-                counts[self.active_input] = max(0, int(self.edit_text))
+                n = max(0, int(self.edit_text))
             except:
                 pass
             self.edit_text = ""
-            selected_building.cook_queue = []
-            for k in ["meal_simple", "meal_fine"]:
-                for _ in range(counts[k]): selected_building.cook_queue.append({"meal": k})
+            if self.active_input in counts:
+                self.emit(cmdlib.make("bld_cook_set", meal=self.active_input, n=n, **self._pos(selected_building)))
 
         elif selected_building.kind == "furnace":
             try:
@@ -51,8 +57,7 @@ class BuildingHUD:
             except:
                 num = 0
             self.edit_text = ""
-            selected_building.smelt_queue = []
-            for _ in range(num): selected_building.smelt_queue.append({"item": "iron"})
+            self.emit(cmdlib.make("bld_smelt_set", n=num, **self._pos(selected_building)))
 
     def handle_key(self, event, selected_building):
         if self.active_input:
@@ -84,11 +89,11 @@ class BuildingHUD:
             if selected_building.kind == "stove":
                 for meal, rect in self.name_rects.items():
                     if rect.collidepoint(mouse_pos):
-                        selected_building.cook_queue = [t for t in selected_building.cook_queue if t["meal"] != meal]
+                        self.emit(cmdlib.make("bld_cook_clear", meal=meal, **self._pos(selected_building)))
                         return True
             elif selected_building.kind == "furnace":
                 if "iron" in self.name_rects and self.name_rects["iron"].collidepoint(mouse_pos):
-                    selected_building.smelt_queue.clear()
+                    self.emit(cmdlib.make("bld_smelt_clear", **self._pos(selected_building)))
                     return True
             return True
         return False
@@ -100,7 +105,7 @@ class BuildingHUD:
         if self.panel_rect.collidepoint(mouse_pos):
             if hasattr(selected_building, "hp") and not selected_building.marked_for_deconstruction:
                 if self.deconstruct_btn.collidepoint(mouse_pos):
-                    selected_building.marked_for_deconstruction = True
+                    self.emit(cmdlib.make("bld_decon", **self._pos(selected_building)))
                     return True, None
 
                 # 处理柜子取出逻辑
@@ -141,20 +146,12 @@ class BuildingHUD:
 
                 for action, rect in self.btn_rects.items():
                     if rect.collidepoint(mouse_pos):
-                        if action == "craft_stone_pick":
-                            selected_building.craft_queue.append({"item": "stone_pickaxe"})
-                        elif action == "craft_axe":
-                            selected_building.craft_queue.append({"item": "axe"})
-                        elif action == "craft_pick":
-                            selected_building.craft_queue.append({"item": "iron_pickaxe"})
-                        elif action == "craft_sword":
-                            selected_building.craft_queue.append({"item": "longsword"})
-                        elif action == "craft_gun":
-                            selected_building.craft_queue.append({"item": "gun"})
-                        elif action == "craft_pistol":
-                            selected_building.craft_queue.append({"item": "pistol"})
-                        elif action == "craft_rifle":
-                            selected_building.craft_queue.append({"item": "rifle"})
+                        item = {"craft_stone_pick": "stone_pickaxe", "craft_axe": "axe",
+                                "craft_pick": "iron_pickaxe", "craft_sword": "longsword",
+                                "craft_gun": "gun", "craft_pistol": "pistol",
+                                "craft_rifle": "rifle"}.get(action)
+                        if item:
+                            self.emit(cmdlib.make("bld_craft_add", item=item, **self._pos(selected_building)))
                         return True, None
             return True, None
         else:

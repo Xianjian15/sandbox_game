@@ -2,6 +2,7 @@
 import pygame
 from settings import WHITE
 from world.items import ITEM_DEFS
+from core import commands as cmdlib
 
 
 class ItemHUD:
@@ -13,6 +14,7 @@ class ItemHUD:
         self.selected_stack = None
         self.selected_tile = None
         self.haul_btn = pygame.Rect(0, 0, 0, 0)
+        self.emit = lambda cmd: None   # 由 GameWorld 接上
 
     def set_target(self, stack, tx, ty):
         self.selected_stack = stack
@@ -98,7 +100,8 @@ class ItemHUD:
         if not self.selected_stack: return False
         if self.panel_rect.collidepoint(mouse_pos):
             if self.haul_btn.collidepoint(mouse_pos):
-                self.selected_stack.allow_haul = not getattr(self.selected_stack, "allow_haul", False)
+                tx, ty = self.selected_tile
+                self.emit(cmdlib.make("toggle_haul", tx=tx, ty=ty, kind=self.selected_stack.kind))
                 return True
             return True
         return False

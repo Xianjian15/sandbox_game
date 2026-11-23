@@ -1,6 +1,7 @@
 # ui/research_menu.py
 import pygame
 from systems.research import TECHS
+from core import commands as cmdlib
 
 
 class ResearchMenu:
@@ -9,6 +10,7 @@ class ResearchMenu:
         self.rects = []
         # 修法1：draw() 时把真实面板区域存下来，handle_click 用它判定
         self.panel_rect = pygame.Rect(0, 0, 0, 0)
+        self.emit = lambda cmd: None   # 由 GameWorld 接上
 
     def draw(self, surface, screen_w, screen_h, rm):
         num_techs = len(TECHS)
@@ -81,6 +83,6 @@ class ResearchMenu:
             return False
         for r, tech_id in self.rects:
             if r.collidepoint(mouse_pos):
-                rm.set_research(tech_id)
+                self.emit(cmdlib.make("research_set", tech=tech_id))
                 return True
         return False

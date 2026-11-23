@@ -92,6 +92,7 @@ def main():
                 acc = 0.0
         else:
             acc = 0.0               # 暂停
+            game.flush_commands()   # 暂停时已到期的指令也要生效（联机模式 cmd_delay>0 时才有意义）
 
         if DEBUG_BUSY:
             debug_timer += dt_raw

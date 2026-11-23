@@ -6,6 +6,7 @@ from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT
 from core.camera import Camera
 from core.time_system import GameTime
 from core.sim_context import SimContext
+from core import commands as cmdlib
 from world.world import World
 from world.items import ItemManager, ITEM_DEFS
 from world.stockpile import StockpileManager
@@ -25,14 +26,11 @@ from entities.animal import Animal
 from combat.effects import Shot, MeleeHit, CombatLog
 from systems.research import ResearchManager
 from world.rooms import RoomManager
-
-# 装备类物品：默认不允许搬运（需在物品面板打开"允许搬运"）
-EQUIP_KINDS = {"stone_pickaxe", "iron_pickaxe", "axe", "longsword",
-               "pistol", "rifle", "gun", "club", "spear"}
-
+from world.command_exec import apply_command, EQUIP_KINDS
 
 class GameWorld:
-    def __init__(self, font, font_big, font_small, font_warn, screen_w, screen_h, seed=None, map_seed=None):
+    def __init__(self, font, font_big, font_small, font_warn, screen_w, screen_h, seed=None, map_seed=None,
+                 cmd_delay=0, local_player=0):
         self.font = font
         self.font_big = font_big
         self.font_small = font_small
@@ -73,6 +71,19 @@ class GameWorld:
         self.build_menu = BuildMenu(font)
         self.toolbar = Toolbar(font)
         self.research_menu = ResearchMenu(font)
+
+        # —— 指令系统：UI 不直接改模拟状态，一律 issue(指令) ——
+        # cmd_delay == 0：单机，指令当场执行（行为与重构前完全一致）；
+        # cmd_delay  > 0：联机，指令排到 当前tick+cmd_delay 再统一执行，并进入 cmd_outbox 等待网络层发送。
+        self.cmd_delay = cmd_delay
+        self.local_player = local_player
+        self.cmd_seq = 0
+        self.cmd_buffer = {}      # tick -> [cmd]
+        self.cmd_outbox = []      # 本地新发出、待网络层发送的指令（仅 cmd_delay > 0 时记录）
+        self.cmd_log = None       # 设为 [] 即可录制"实际被执行的指令序列"，用于回放测试
+        self.bhud.emit = self.issue
+        self.ihud.emit = self.issue
+        self.research_menu.emit = self.issue
         self.log = CombatLog()
 
         # ---- 实体 ----
@@ -137,6 +148,43 @@ class GameWorld:
         self.game_speed = 1.0
         self.warning_timer = 0.0
         self.warning_text = ""
+
+    # ---------------- 指令系统 ----------------
+    def issue(self, cmd):
+        """UI 的唯一出口：给指令盖章（玩家、序号、计划 tick），然后执行或排期。"""
+        cmd = dict(cmd)
+        self.cmd_seq += 1
+        cmd["p"] = self.local_player
+        cmd["s"] = self.cmd_seq
+        cmd["tick"] = self.game_time.tick + self.cmd_delay
+        cmdlib.validate(cmd)
+        if self.cmd_delay == 0:
+            self._execute(cmd)
+        else:
+            self.cmd_outbox.append(cmd)
+            self.receive_command(cmd)
+
+    def receive_command(self, cmd):
+        """收到一条指令（自己发的或对方发来的）：排进对应 tick。"""
+        self.cmd_buffer.setdefault(cmd["tick"], []).append(cmd)
+
+    def flush_commands(self):
+        """执行所有已到期的指令。顺序固定为 (tick, 玩家, 序号)，两端一致。"""
+        now = self.game_time.tick
+        due = [t for t in self.cmd_buffer if t <= now]
+        if not due:
+            return
+        cmds = []
+        for t in due:
+            cmds.extend(self.cmd_buffer.pop(t))
+        cmds.sort(key=lambda c: (c["tick"], c["p"], c["s"]))
+        for c in cmds:
+            self._execute(c)
+
+    def _execute(self, cmd):
+        if self.cmd_log is not None:
+            self.cmd_log.append((self.game_time.tick, dict(cmd)))
+        apply_command(self, cmd)
 
     def selected_colonists(self):
         return [c for c in self.colonists if c.selected]
@@ -252,7 +300,8 @@ class GameWorld:
             consumed_sp, delete_sp = self.shud.handle_click(event.pos)
             if consumed_sp:
                 if delete_sp and self.selected_stockpile in self.stockpiles.stockpiles:
-                    self.stockpiles.stockpiles.remove(self.selected_stockpile)
+                    sp = self.selected_stockpile
+                    self.issue(cmdlib.make("stockpile_remove", x1=sp.x1, y1=sp.y1, x2=sp.x2, y2=sp.y2))
                     self.selected_stockpile = None
                 self.left_down_pos = None; return
 
@@ -312,10 +361,8 @@ class GameWorld:
 
     def _handle_keydown(self, event, mouse_pos, screen_w, screen_h):
         if event.key == pygame.K_SPACE:
-            if self.game_speed == 0.0: self.game_speed = 1.0
-            elif self.game_speed == 1.0: self.game_speed = 2.0
-            elif self.game_speed == 2.0: self.game_speed = 3.0
-            else: self.game_speed = 0.0
+            nxt = {0: 1, 1: 2, 2: 3}.get(int(self.game_speed), 0)
+            self.issue(cmdlib.make("speed", v=nxt))
             return
         if event.key == pygame.K_ESCAPE:
             if self.show_help:
@@ -374,8 +421,12 @@ class GameWorld:
             self.log.add(fail_msg, (255, 100, 100))
 
     def _handle_right_click(self, pos, shift_held):
+        """右键：这里只做"点到了什么"的判断（纯 UI），然后发出一条指令。
+        真正的合法性校验与执行都在 world/command_exec.py。"""
         selected = [c for c in self.colonists if c.selected and c.hp > 0]
         if not selected: return
+        ids = [c.id for c in selected]
+        q = bool(shift_held)
         wx, wy = self.camera.screen_to_world(*pos)
         tx, ty = self.camera.screen_to_tile(*pos)
 
@@ -395,206 +446,65 @@ class GameWorld:
 
         building_here = self.buildings.get_building_at(tx, ty)
         blueprints_here = self.buildings.get_blueprints_at(tx, ty)
+        station_of = {"workbench": "craft", "research_bench": "research", "stove": "cook", "furnace": "smelt"}
 
         if hit_enemy is not None:
-            cmd = {"type": "attack", "enemy": hit_enemy}
-            if not shift_held:
-                for c in selected:
-                    c._release_job(); c.queue.clear(); c.state = None
-                    c.target_enemy = None; c.target_animal = None
-                for c in selected: c.assign_attack(hit_enemy)
-            else:
-                for c in selected: c.enqueue_command(cmd)
+            self.issue(cmdlib.make("attack", ids=ids, target=hit_enemy.id, q=q))
 
         elif hit_animal is not None:
-            cmd = {"type": "hunt", "animal": hit_animal}
-            if not shift_held:
-                for c in selected:
-                    c._release_job(); c.queue.clear(); c.state = None
-                    c.target_enemy = None; c.target_animal = None
-                for c in selected: c.assign_hunt(hit_animal)
-            else:
-                for c in selected: c.enqueue_command(cmd)
+            self.issue(cmdlib.make("hunt", ids=ids, target=hit_animal.id, q=q))
 
         elif building_here and building_here.kind in ("small_cabinet", "large_cabinet"):
+            # 纯 UI：选中柜子，打开面板
             self.selected_building = building_here
             self.selected_item_stack = None
             self.selected_stockpile = None
             for c in self.colonists: c.selected = False
             for c in selected: c.selected = True
 
-        elif building_here and building_here.kind == "workbench":
-            bench = building_here
-            if bench.craft_queue:
-                cmd = {"type": "craft", "world": self.world, "items": self.items,
-                       "stockpiles": self.stockpiles, "buildings": self.buildings, "bench": bench}
-                if not shift_held:
-                    for c in selected:
-                        c._release_job(); c.queue.clear(); c.state = None
-                    selected[0].assign_craft(self.world, self.items, self.stockpiles, self.buildings, bench)
-                else:
-                    for c in selected: c.enqueue_command(cmd)
-            else:
-                self.log.add("工作台没有制作任务：请先点选它，在面板里添加", (255, 200, 100))
-
-        elif building_here and building_here.kind == "research_bench":
-            bench = building_here
-            if not self.research_mgr.current_research:
-                self.log.add("请先在科技菜单（R）选择研究项目", (255, 200, 100))
-            else:
-                cmd = {"type": "research", "world": self.world, "buildings": self.buildings,
-                       "tx": bench.tx, "ty": bench.ty, "layer": bench.layer}
-                self._command_station(
-                    selected, shift_held, bench, cmd,
-                    lambda c: c.assign_research(self.world, self.buildings, bench.tx, bench.ty, bench.layer),
-                    "无法前往研究台（路被堵住了？）")
-
-        elif building_here and building_here.kind == "stove":
-            stove = building_here
-            if not stove.cook_queue:
-                self.log.add("烹饪台没有任务：请先点选它，在面板里添加", (255, 200, 100))
-            else:
-                cmd = {"type": "cook", "world": self.world, "items": self.items,
-                       "stockpiles": self.stockpiles, "buildings": self.buildings, "stove": stove}
-                self._command_station(
-                    selected, shift_held, stove, cmd,
-                    lambda c: c.assign_cook(self.world, self.items, self.stockpiles, self.buildings, stove),
-                    "无法开始烹饪：库存区/柜子里没有可用食材，或到不了烹饪台")
-
-        elif building_here and building_here.kind == "furnace":
-            furnace = building_here
-            if not furnace.smelt_queue:
-                self.log.add("熔炉没有任务：请先点选它，在面板里添加", (255, 200, 100))
-            else:
-                cmd = {"type": "smelt", "world": self.world, "items": self.items,
-                       "stockpiles": self.stockpiles, "buildings": self.buildings, "furnace": furnace}
-                self._command_station(
-                    selected, shift_held, furnace, cmd,
-                    lambda c: c.assign_smelt(self.world, self.items, self.stockpiles, self.buildings, furnace),
-                    "无法开始熔炼：库存区/柜子里没有粗铁，或到不了熔炉")
+        elif building_here and building_here.kind in station_of:
+            self.issue(cmdlib.make("station", ids=ids, kind=station_of[building_here.kind],
+                                   tx=building_here.tx, ty=building_here.ty, q=q))
 
         # 【关键修复】蓝图优先于物品：站在地板上右键蓝图时，脚下的散落材料不该抢走指令
         elif blueprints_here:
-            bp = blueprints_here[0]
-            if bp.reserved_by is not None:
-                for c2 in self.colonists:
-                    if c2.id == bp.reserved_by:
-                        c2._release_job(); break
-                bp.reserved_by = None
-            cmd = {"type": "build", "world": self.world, "buildings": self.buildings,
-                   "items": self.items, "stockpiles": self.stockpiles, "bp": bp}
-            if not shift_held:
-                for c in selected:
-                    c._release_job(); c.queue.clear(); c.state = None
-                    c.target_enemy = None; c.target_animal = None
-                selected[0].assign_build(self.world, self.buildings, self.items, self.stockpiles, bp)
-            else:
-                for c in selected: c.enqueue_command(cmd)
+            self.issue(cmdlib.make("build", ids=ids, tx=tx, ty=ty, q=q))
 
         elif hit_item is not None:
             equip_kinds = ["axe", "stone_pickaxe", "iron_pickaxe", "longsword",
                            "gun", "pistol", "rifle"]
             if hit_item.kind in equip_kinds:
-                # 拾取/装备：直接执行
-                cmd = {"type": "equip_from_ground", "world": self.world, "items": self.items,
-                       "tx": tx, "ty": ty, "kind": hit_item.kind}
-                if not shift_held:
-                    for c in selected:
-                        c._release_job(); c.queue.clear(); c.state = None
-                    selected[0].assign_equip_from_ground(self.world, self.items, tx, ty, hit_item.kind)
-                else:
-                    for c in selected: c.enqueue_command(cmd)
+                self.issue(cmdlib.make("equip", ids=ids, tx=tx, ty=ty, kind=hit_item.kind, q=q))
             else:
-                # 材料：装备类默认不搬，材料照常搬
-                if hit_item.kind in EQUIP_KINDS and not getattr(hit_item, "allow_haul", False):
-                    name = ITEM_DEFS.get(hit_item.kind, {}).get("name", hit_item.kind)
-                    self.log.add(f"{name} 未开启“允许搬运”（在物品面板里开关）", (255, 200, 100))
-                else:
-                    cabinet = None
-                    seen_b = set()
-                    for b in self.buildings.buildings.values():
-                        if id(b) in seen_b: continue
-                        seen_b.add(id(b))
-                        if b.kind in ("small_cabinet", "large_cabinet") and \
-                           not b.marked_for_deconstruction and b.reserved_by is None:
-                            current_types = len(b.inventory.keys())
-                            if hit_item.kind not in b.inventory and current_types >= b.max_types: continue
-                            space = b.capacity - b.inventory.get(hit_item.kind, 0)
-                            if space > 0:
-                                cabinet = b; break
-                    target_pos = (0, 0)
-                    if cabinet:
-                        target_pos = (cabinet.tx, cabinet.ty)
-                    else:
-                        sp_dst = selected[0]._find_dst_slot(self.items, self.stockpiles)
-                        if sp_dst: target_pos = sp_dst
-                    if cabinet or target_pos != (0, 0):
-                        cmd = {"type": "haul", "world": self.world, "items": self.items,
-                               "stockpiles": self.stockpiles, "src": (tx, ty), "dst": target_pos,
-                               "kind": hit_item.kind, "amount": selected[0].carry_limit, "cabinet": cabinet}
-                        if not shift_held:
-                            for c in selected:
-                                c._release_job(); c.queue.clear(); c.state = None
-                            selected[0].assign_haul(self.world, self.items, self.stockpiles,
-                                                    tx, ty, target_pos[0], target_pos[1],
-                                                    hit_item.kind, selected[0].carry_limit, cabinet)
-                        else:
-                            for c in selected: c.enqueue_command(cmd)
+                self.issue(cmdlib.make("haul", ids=ids, tx=tx, ty=ty, kind=hit_item.kind, q=q))
 
         elif self.world.is_harvestable(tx, ty):
-            cmd = {"type": "harvest", "world": self.world, "tx": tx, "ty": ty}
-            if not shift_held:
-                for c in selected:
-                    c._release_job(); c.queue.clear(); c.state = None
-                    c.target_enemy = None; c.target_animal = None
-                selected[0].assign_harvest(self.world, tx, ty)
-            else:
-                for c in selected: c.enqueue_command(cmd)
+            self.issue(cmdlib.make("harvest", ids=ids, tx=tx, ty=ty, q=q))
 
         elif self.world.is_walkable(tx, ty):
-            offsets = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
-            for i, c in enumerate(selected):
-                ox, oy = offsets[i % len(offsets)]
-                gx, gy = tx + ox, ty + oy
-                if not self.world.is_walkable(gx, gy):
-                    gx, gy = tx, ty
-                cmd = {"type": "move", "world": self.world, "tx": gx, "ty": gy}
-                if not shift_held:
-                    c._release_job()
-                    c.queue.clear()
-                    c.state = None
-                    c.target_enemy = None
-                    c.target_animal = None
-                    c.move_to(self.world, gx, gy)
-                else:
-                    c.enqueue_command(cmd)
+            self.issue(cmdlib.make("move", ids=ids, tx=tx, ty=ty, q=q))
 
     def _handle_building_hud_action(self, action):
         if action and action[0] == "take":
             _, take_kind, take_amt = action
-            selected = self.selected_colonists()
-            success = False
-            candidates = selected if selected else [c for c in self.colonists if c.hp > 0]
-            for c in candidates:
-                if c.hp > 0:
-                    if c.assign_take_from_cabinet(self.world, self.items, self.stockpiles,
-                                                   self.buildings, self.selected_building,
-                                                   take_kind, take_amt):
-                        success = True; break
-            if not success:
-                self.log.add("指派取物失败：小人无法到达柜子！", (255, 100, 100))
+            b = self.selected_building
+            if b is None: return
+            ids = [c.id for c in self.selected_colonists()]
+            self.issue(cmdlib.make("take", ids=ids, tx=b.tx, ty=b.ty, layer=b.layer,
+                                   kind=take_kind, amt=int(take_amt)))
 
     def _handle_farm_popup(self, event, screen_w, screen_h):
         if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
             return
+        r = self.pending_farm_rect
         if pygame.Rect(screen_w // 2 - 180, screen_h // 2 - 30, 160, 50).collidepoint(event.pos):
             if self.research_mgr.can_plant("berry"):
-                self.farms.add(self.pending_farm_rect, "berry")
+                self.issue(cmdlib.make("farm_add", x1=r[0], y1=r[1], x2=r[2], y2=r[3], plant="berry"))
                 self.pending_farm_rect = None
                 self.mode = None
         elif pygame.Rect(screen_w // 2 + 20, screen_h // 2 - 30, 160, 50).collidepoint(event.pos):
             if self.research_mgr.can_plant("tree"):
-                self.farms.add(self.pending_farm_rect, "tree")
+                self.issue(cmdlib.make("farm_add", x1=r[0], y1=r[1], x2=r[2], y2=r[3], plant="tree"))
                 self.pending_farm_rect = None
                 self.mode = None
         elif pygame.Rect(screen_w // 2 - 50, screen_h // 2 + 60, 100, 30).collidepoint(event.pos):
@@ -617,38 +527,22 @@ class GameWorld:
                 x2, y2 = self.drag_end
                 tx1, tx2 = min(x1, x2), max(x1, x2)
                 ty1, ty2 = min(y1, y2), max(y1, y2)
+                rect = dict(x1=tx1, y1=ty1, x2=tx2, y2=ty2)
                 if self.mode == "stockpile":
-                    self.stockpiles.add((tx1, ty1, tx2, ty2))
+                    self.issue(cmdlib.make("stockpile_add", **rect))
                     self.mode = None
                 elif self.mode == "farm":
                     self.pending_farm_rect = (tx1, ty1, tx2, ty2)
                 elif self.mode == "build" and self.current_build_kind and self.current_build_mat:
-                    w, h = (BUILDING_DEFS[self.current_build_kind]["w"],
-                            BUILDING_DEFS[self.current_build_kind]["h"])
-                    if self.build_rotation % 2 == 1: w, h = h, w
-                    for ty in range(ty1, ty2 + 1, h):
-                        for tx in range(tx1, tx2 + 1, w):
-                            if self.buildings.can_place(self.world, tx, ty,
-                                                        self.current_build_kind, self.current_build_mat,
-                                                        self.build_rotation):
-                                self.buildings.add_blueprint(self.current_build_kind,
-                                                             self.current_build_mat, tx, ty,
-                                                             self.build_rotation)
+                    self.issue(cmdlib.make("build_area", kind=self.current_build_kind,
+                                           mat=self.current_build_mat, rot=self.build_rotation, **rect))
                 elif self.mode == "deconstruct":
-                    self.stockpiles.remove_tiles(tx1, ty1, tx2, ty2)
-                    self.farms.remove_tiles(tx1, ty1, tx2, ty2)
-                    self.buildings.remove_area(tx1, ty1, tx2, ty2)
+                    self.issue(cmdlib.make("deconstruct_area", **rect))
                 elif self.mode == "harvest_area":
-                    for ty in range(ty1, ty2 + 1):
-                        for tx in range(tx1, tx2 + 1):
-                            if self.world.is_harvestable(tx, ty):
-                                self.ctx.designated_harvests.add((tx, ty))
+                    self.issue(cmdlib.make("harvest_area", **rect))
                     self.mode = None
                 elif self.mode == "hunt_area":
-                    for a in self.animals:
-                        atx, aty = a.current_tile()
-                        if tx1 <= atx <= tx2 and ty1 <= aty <= ty2:
-                            a.is_hunted = True
+                    self.issue(cmdlib.make("hunt_area", **rect))
                     self.mode = None
             self.drag_start = None
             self.drag_end = None
@@ -781,6 +675,7 @@ class GameWorld:
         由 main 的累加器循环调用；倍速 = 每秒调用的次数，而不是步长。"""
         dt = TICK_DT
 
+        self.flush_commands()     # 先执行本 tick 到期的玩家指令，再推进模拟
         self.game_time.update()
         self.farms.update(dt)
         self.room_mgr.update(dt)
