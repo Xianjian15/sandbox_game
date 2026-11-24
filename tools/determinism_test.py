@@ -120,9 +120,9 @@ SCRIPT = [(60, step_research), (2400, step_cook), (5400, step_smelt),
 
 
 # ---------------- 主流程 ----------------
-def make_world(seed):
+def make_world(seed, num_players=1):
     font = pygame.font.Font(None, 16)
-    return GameWorld(font, font, font, font, INIT_W, INIT_H, seed=seed)
+    return GameWorld(font, font, font, font, INIT_W, INIT_H, seed=seed, num_players=num_players)
 
 
 def run(ticks, seed, check, inject_at):

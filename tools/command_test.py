@@ -55,7 +55,7 @@ def setup(g):
 
 # ---------------- UI 操作（真正走 UI 处理函数，而不是直接构造指令） ----------------
 def _select(g):
-    alive = [c for c in g.colonists if c.hp > 0]
+    alive = [c for c in g.colonists if c.hp > 0 and c.owner_id == g.local_player]
     for c in g.colonists: c.selected = False
     if alive: alive[0].selected = True
 
@@ -133,7 +133,7 @@ def op_decon_building(g, s):
 
 
 def _near(g, dx, dy):
-    c = next((c for c in g.colonists if c.hp > 0), g.colonists[0])
+    c = next((c for c in g.colonists if c.hp > 0 and c.owner_id == g.local_player), g.colonists[0])
     cx, cy = c.current_tile()
     return cx + dx, cy + dy
 
@@ -341,7 +341,7 @@ def check_roundtrip_and_replay(seed):
 
 def check_two_peers(seed, delay=2):
     print(f"== 检查 3：双端锁步模拟（cmd_delay={delay}，指令经 JSON 往返交换） ==")
-    p0 = make_world(seed); p1 = make_world(seed)
+    p0 = make_world(seed, 2); p1 = make_world(seed, 2)
     p0.cmd_delay = delay; p1.cmd_delay = delay
     p0.local_player = 0; p1.local_player = 1
     s0, s1 = setup(p0), setup(p1)

@@ -2,7 +2,7 @@
 import random
 import pygame
 
-from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT
+from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT, START_COLONISTS
 from core.camera import Camera
 from core.time_system import GameTime
 from core.sim_context import SimContext
@@ -30,7 +30,7 @@ from world.command_exec import apply_command, EQUIP_KINDS
 
 class GameWorld:
     def __init__(self, font, font_big, font_small, font_warn, screen_w, screen_h, seed=None, map_seed=None,
-                 cmd_delay=0, local_player=0):
+                 cmd_delay=0, local_player=0, num_players=1):
         self.font = font
         self.font_big = font_big
         self.font_small = font_small
@@ -77,6 +77,7 @@ class GameWorld:
         # cmd_delay  > 0：联机，指令排到 当前tick+cmd_delay 再统一执行，并进入 cmd_outbox 等待网络层发送。
         self.cmd_delay = cmd_delay
         self.local_player = local_player
+        self.num_players = max(1, int(num_players))   # 联机=2；每位玩家只能指挥 owner_id 等于自己的小人
         # 回合计数：指令的"时钟"。每调用一次 sim_step() 加 1，【与是否暂停无关】。
         # 暂停时世界不更新，但回合照走，这样"取消暂停"这条指令才能在联机时生效。
         self.turn = 0
@@ -98,21 +99,26 @@ class GameWorld:
 
         base_x = MAP_WIDTH // 2
         base_y = MAP_HEIGHT // 2 - 5
-        # 多人准备：开局 1 个小人
-        for i in range(1):
-            found = None
-            for dy in range(-2, 3):
-                for dx in range(-3, 4):
-                    tx, ty = base_x + i * 2 + dx, base_y + dy
-                    if self.world.is_walkable(tx, ty):
-                        found = (tx, ty)
-                        break
-                if found: break
-            if not found: found = (base_x, base_y)
-            c = Colonist(*found, weapon_key="fist", ctx=self.ctx)
-            c.owner_id = 0
-            self.colonists.append(c)
-
+        # 每位玩家开局 START_COLONISTS 个小人（owner_id = 玩家编号）。
+        # 出生点按玩家错开：玩家 i 在基地中心左右各偏移 4 格；顺序固定 → id 分配两端一致。
+        n = self.num_players
+        for pl in range(n):
+            for k in range(START_COLONISTS):
+                off = (pl - (n - 1) / 2.0) * 4
+                bx = base_x + int(round(off)) + k * 2
+                found = None
+                for dy in range(-2, 3):
+                    for dx in range(-3, 4):
+                        tx, ty = bx + dx, base_y + dy
+                        if self.world.is_walkable(tx, ty) and not any(
+                                c.current_tile() == (tx, ty) for c in self.colonists):
+                            found = (tx, ty)
+                            break
+                    if found: break
+                if not found: found = (bx, base_y)
+                c = Colonist(*found, weapon_key="fist", ctx=self.ctx)
+                c.owner_id = pl
+                self.colonists.append(c)
 
         spawn_attempts = 0
         while len(self.animals) < 15 and spawn_attempts < 200:
@@ -191,8 +197,19 @@ class GameWorld:
             self.cmd_log.append((self.turn, dict(cmd)))
         apply_command(self, cmd)
 
+    OWNER_COLORS = ((90, 160, 255), (255, 150, 60), (120, 220, 120), (220, 100, 220))
+
+    def _draw_owner_mark(self, surface, c):
+        """联机时在小人脚下画归属色环，自己的小人另加"我"标记，一眼分清谁是谁的。"""
+        sx, sy = self.camera.world_to_screen(c.x, c.y)
+        col = self.OWNER_COLORS[c.owner_id % len(self.OWNER_COLORS)]
+        pygame.draw.circle(surface, col, (int(sx), int(sy)), c.radius + 3, 2)
+        tag = f"P{c.owner_id + 1}" + (" 我" if c.owner_id == self.local_player else "")
+        img = self.font_small.render(tag, True, col)
+        surface.blit(img, (int(sx - img.get_width() / 2), int(sy + c.radius + 4)))
+
     def selected_colonists(self):
-        return [c for c in self.colonists if c.selected]
+        return [c for c in self.colonists if c.selected and c.owner_id == self.local_player]
 
     def is_mouse_in_ui(self, mouse_pos):
         selected_cols = self.selected_colonists()
@@ -428,7 +445,8 @@ class GameWorld:
     def _handle_right_click(self, pos, shift_held):
         """右键：这里只做"点到了什么"的判断（纯 UI），然后发出一条指令。
         真正的合法性校验与执行都在 world/command_exec.py。"""
-        selected = [c for c in self.colonists if c.selected and c.hp > 0]
+        selected = [c for c in self.colonists
+                    if c.selected and c.hp > 0 and c.owner_id == self.local_player]
         if not selected: return
         ids = [c.id for c in selected]
         q = bool(shift_held)
@@ -570,7 +588,8 @@ class GameWorld:
                 self.selected_stockpile = None
                 self.selected_item_stack = None
                 for c in self.colonists:
-                    if c.hp > 0 and c.current_tile() in self.selection.selected_tiles:
+                    if (c.hp > 0 and c.owner_id == self.local_player
+                            and c.current_tile() in self.selection.selected_tiles):
                         c.selected = True
             self.left_down_pos = None
             self.left_drag_moved = False
@@ -580,7 +599,7 @@ class GameWorld:
         tx, ty = self.camera.screen_to_tile(*pos)
         hit_col = None
         for c in self.colonists:
-            if c.hp <= 0: continue
+            if c.hp <= 0 or c.owner_id != self.local_player: continue   # 只能选中自己的小人
             if (c.x - wx) ** 2 + (c.y - wy) ** 2 <= (c.radius + 15) ** 2:
                 hit_col = c; break
         if hit_col:
@@ -862,7 +881,10 @@ class GameWorld:
 
         for c in self.colonists:
             if c.selected: c.draw_path(surface, self.camera, self.world)
-        for c in self.colonists: c.draw(surface, self.camera, self.font)
+        for c in self.colonists:
+            c.draw(surface, self.camera, self.font)
+            if self.num_players > 1 and c.hp > 0:
+                self._draw_owner_mark(surface, c)
         for e in self.enemies: e.draw(surface, self.camera, self.font)
         for ef in self.effects: ef.draw(surface, self.camera)
         self.selection.draw(surface, self.camera)

@@ -23,10 +23,16 @@ CRAFT_ITEMS = {"stone_pickaxe", "axe", "iron_pickaxe", "longsword", "gun", "pist
 
 
 # ---------------- 辅助 ----------------
-def _units(g, ids):
-    """按 id 解析出存活小人；顺序固定为 g.colonists 的顺序（与旧的"选中列表"顺序一致）。"""
-    idset = set(ids)
-    return [c for c in g.colonists if c.id in idset and c.hp > 0]
+def _units(g, cmd):
+    """按 id 解析出存活小人；顺序固定为 g.colonists 的顺序（与旧的"选中列表"顺序一致）。
+
+    所有权：指令里带发令玩家 p 时，只认 owner_id == p 的小人，别人的小人 id 一律忽略
+    （两端都在同一位置执行同样的过滤，所以不会分叉；也防止对端发来越权指令）。
+    没有 p（旧测试直接调用）则不过滤。"""
+    idset = set(cmd["ids"])
+    p = cmd.get("p")
+    return [c for c in g.colonists
+            if c.id in idset and c.hp > 0 and (p is None or c.owner_id == p)]
 
 
 def _reset(c, clear_targets=True):
@@ -53,7 +59,7 @@ def _rect(cmd):
 
 # ---------------- 对小人的命令 ----------------
 def _attack(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     e = next((e for e in g.enemies if e.id == cmd["target"] and e.hp > 0), None)
     if not sel or e is None:
         return
@@ -65,7 +71,7 @@ def _attack(g, cmd):
 
 
 def _hunt(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     a = next((a for a in g.animals if a.id == cmd["target"] and a.hp > 0), None)
     if not sel or a is None:
         return
@@ -77,7 +83,7 @@ def _hunt(g, cmd):
 
 
 def _station(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     kind = cmd["kind"]
     b = _building(g, cmd["tx"], cmd["ty"])
     if not sel or b is None or b.kind != STATION_KIND.get(kind):
@@ -124,7 +130,7 @@ def _station(g, cmd):
 
 
 def _build(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     bps = g.buildings.get_blueprints_at(cmd["tx"], cmd["ty"])
     if not sel or not bps:
         return
@@ -144,7 +150,7 @@ def _build(g, cmd):
 
 
 def _equip(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     tx, ty, kind = cmd["tx"], cmd["ty"], cmd["kind"]
     if not sel or (tx, ty, kind) not in g.items.stacks:
         return
@@ -158,7 +164,7 @@ def _equip(g, cmd):
 
 
 def _haul(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     tx, ty, kind = cmd["tx"], cmd["ty"], cmd["kind"]
     stack = g.items.stacks.get((tx, ty, kind))
     if not sel or stack is None:
@@ -199,7 +205,7 @@ def _haul(g, cmd):
 
 
 def _harvest(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     tx, ty = cmd["tx"], cmd["ty"]
     if not sel or not g.world.is_harvestable(tx, ty):
         return
@@ -211,7 +217,7 @@ def _harvest(g, cmd):
 
 
 def _move(g, cmd):
-    sel = _units(g, cmd["ids"])
+    sel = _units(g, cmd)
     tx, ty = cmd["tx"], cmd["ty"]
     if not sel or not g.world.is_walkable(tx, ty):
         return
@@ -232,8 +238,10 @@ def _take(g, cmd):
     cab = _building(g, cmd["tx"], cmd["ty"], cmd.get("layer"))
     if cab is None or cab.kind not in CABINETS:
         return
-    sel = _units(g, cmd["ids"])
-    candidates = sel if sel else [c for c in g.colonists if c.hp > 0]
+    sel = _units(g, cmd)
+    p = cmd.get("p")
+    candidates = sel if sel else [c for c in g.colonists
+                                  if c.hp > 0 and (p is None or c.owner_id == p)]
     for c in candidates:
         if c.assign_take_from_cabinet(g.world, g.items, g.stockpiles, g.buildings,
                                       cab, cmd["kind"], cmd["amt"]):

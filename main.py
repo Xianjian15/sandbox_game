@@ -74,7 +74,7 @@ def play(screen, clock, fonts, session, seed):
         cfg = session.cfg
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H,
                          seed=cfg["seed"], map_seed=cfg["map_seed"],
-                         cmd_delay=cfg["delay"], local_player=cfg["player"])
+                         cmd_delay=cfg["delay"], local_player=cfg["player"], num_players=2)
         session.attach(game)
     else:
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)

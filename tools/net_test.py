@@ -77,7 +77,7 @@ def make_world(cfg, tweak=None):
     pygame.font.init()
     f = pygame.font.Font(None, 16)
     g = GameWorld(f, f, f, f, INIT_W, INIT_H, seed=cfg["seed"], map_seed=cfg["map_seed"],
-                  cmd_delay=cfg["delay"], local_player=cfg["player"])
+                  cmd_delay=cfg["delay"], local_player=cfg["player"], num_players=2)
     s = ct.setup(g)
     if tweak: tweak(g)
     return g, s
