@@ -1,45 +1,90 @@
 # main.py
+import argparse
+import json
 import os
 import pygame
 import sys
 
 from settings import INIT_W, INIT_H, FPS, TICK_DT, MAX_TICKS_PER_FRAME
 from world.game_world import GameWorld
+from net.session import LockstepSession, DEFAULT_PORT, get_lan_ip
+from ui.menu import run_menu
+from ui.fonts import load_font, font_source
+from core.app_paths import setup_logging, report_crash, data_file, resource_path
+from core.version import GAME_VERSION, DISPLAY_NAME
 
 # 调试：每秒打印一次"自认为在忙"的小人状态（排查卡死用）
-DEBUG_BUSY = False
+DEBUG_BUSY = os.environ.get("RW_DEBUG") == "1"      # 设环境变量 RW_DEBUG=1 打开调试输出
 
 
-def load_font(size=18):
-    candidates = [
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return pygame.font.Font(path, size)
-    return pygame.font.Font(None, size)
+def parse_args():
+    ap = argparse.ArgumentParser(description="RimWorld-like 沙盒（支持局域网双人联机）")
+    ap.add_argument("--host", nargs="?", const=DEFAULT_PORT, type=int, metavar="PORT",
+                    help=f"作为主机开一局联机游戏（默认端口 {DEFAULT_PORT}）")
+    ap.add_argument("--join", metavar="IP[:PORT]", help="加入主机的联机游戏，例如 192.168.1.5 或 192.168.1.5:47777")
+    ap.add_argument("--delay", type=int, default=4, help="联机输入延迟（回合数，默认 4；网络差就调大）")
+    ap.add_argument("--seed", type=int, default=42, help="（主机）地图/随机种子")
+    return ap.parse_args()
 
 
-def main():
-    pygame.init()
-    screen = pygame.display.set_mode((INIT_W, INIT_H), pygame.RESIZABLE)
-    pygame.display.set_caption("RimWorld-like - 沙盒生存")
-    clock = pygame.time.Clock()
+def show_message(screen, font, lines):
+    screen.fill((20, 20, 25))
+    y = screen.get_height() // 2 - 20 * len(lines) // 2
+    for text in lines:
+        surf = font.render(text, True, (230, 230, 230))
+        screen.blit(surf, (screen.get_width() // 2 - surf.get_width() // 2, y))
+        y += 30
+    pygame.display.flip()
 
-    font = load_font(16)
-    font_big = load_font(20)
-    font_small = load_font(14)
-    font_warn = load_font(28)
 
-    game = GameWorld(font, font_big, font_small, font_warn,
-                     INIT_W, INIT_H, seed=42)
+def wait_for_connection(screen, font, clock, session, lines_fn):
+    """联机握手界面：等到会话 ready（或失败 / 玩家按 ESC 取消）。"""
+    while session.state not in ("ready", "failed"):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                session.close()
+                return False
+        session.pump()
+        show_message(screen, font, lines_fn() + ["", "按 ESC 取消"])
+        clock.tick(30)
+    if session.state == "failed":
+        show_message(screen, font, [session.error, "", "3 秒后退出"])
+        pygame.time.wait(3000)
+        return False
+    return True
 
+
+def draw_confirm(screen, font, online):
+    w, h = screen.get_size()
+    veil = pygame.Surface((w, h), pygame.SRCALPHA)
+    veil.fill((0, 0, 0, 150))
+    screen.blit(veil, (0, 0))
+    lines = ["返回主菜单？", "联机中返回会断开与对方的连接" if online else "当前进度不会保存", "Y / Enter 确认      N / Esc 取消"]
+    y = h // 2 - 50
+    for i, text in enumerate(lines):
+        surf = font.render(text, True, (255, 255, 255) if i != 1 else (255, 200, 120))
+        screen.blit(surf, (w // 2 - surf.get_width() // 2, y))
+        y += 34
+
+
+def play(screen, clock, fonts, session, seed):
+    """开一局游戏（单机或联机），直到玩家关窗口或选择返回主菜单。返回 ("quit"/"menu", screen)。"""
+    font, font_big, font_small, font_warn = fonts["normal"], fonts["big"], fonts["small"], fonts["warn"]
+    if session is not None:
+        cfg = session.cfg
+        game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H,
+                         seed=cfg["seed"], map_seed=cfg["map_seed"],
+                         cmd_delay=cfg["delay"], local_player=cfg["player"])
+        session.attach(game)
+    else:
+        game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)
+    desync_dumped = False
     is_fullscreen = False
     running = True
     acc = 0.0            # 模拟时间累加器（单位：秒）
     debug_timer = 0.0
+    confirm_exit = False
+    leave = "quit"       # 循环结束后返回给 main 的去向："quit" 退出程序 / "menu" 回到主菜单
     while running:
         dt_raw = clock.tick(FPS) / 1000.0       # 真实帧时间：只用于渲染/UI/相机
 
@@ -48,6 +93,18 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+                continue
+
+            if confirm_exit:                    # "返回主菜单？"确认框打开时，按键只用来回答它
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_y, pygame.K_RETURN, pygame.K_KP_ENTER):
+                        leave, running = "menu", False
+                    elif event.key in (pygame.K_n, pygame.K_ESCAPE, pygame.K_F10):
+                        confirm_exit = False
+                continue
+
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
+                confirm_exit = True
                 continue
 
             if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
@@ -81,7 +138,29 @@ def main():
 
         # ---- 固定步长模拟 ----
         # 倍速只改变"每秒跑多少个 tick"，每个 tick 的步长永远是 TICK_DT。
-        if game.game_speed > 0:
+        if session is not None and session.active:
+            # 联机：回合时钟照走（暂停时按 1 倍速率，保证"取消暂停"指令能生效）；
+            # 等不到对方的包就停在原地，不囤积时间。
+            acc += dt_raw * max(1.0, game.game_speed)
+            ticks = 0
+            while acc >= TICK_DT and ticks < MAX_TICKS_PER_FRAME:
+                if not session.try_turn():
+                    break
+                acc -= TICK_DT
+                ticks += 1
+            acc = min(acc, TICK_DT * MAX_TICKS_PER_FRAME)
+            if ticks == 0:
+                session.pump()
+        elif session is not None and session.state in ("desync", "mismatch"):
+            session.pump()          # 失去同步：世界冻结，保留现场（状态文字已显示在右上角）
+            if session.state == "desync" and not desync_dumped:
+                desync_dumped = True
+                try:
+                    with open(data_file("desync_report.json"), "w", encoding="utf-8") as f:
+                        json.dump(session.desync_info, f, ensure_ascii=False, indent=2)
+                except OSError:
+                    pass
+        elif game.game_speed > 0:
             acc += dt_raw * game.game_speed
             ticks = 0
             while acc >= TICK_DT and ticks < MAX_TICKS_PER_FRAME:
@@ -108,11 +187,74 @@ def main():
                               f"stuck={c.stuck_timer:.2f}")
 
         game.draw(screen, dt_raw)
+        if confirm_exit:
+            draw_confirm(screen, fonts["big"], session is not None)
         pygame.display.flip()
 
+    if session is not None:
+        session.close()
+    return leave, screen
+
+
+def set_window_icon():
+    """窗口/任务栏图标。找不到图标文件就算了，不影响游戏。"""
+    try:
+        pygame.display.set_icon(pygame.image.load(resource_path("assets", "icon.png")))
+    except Exception:                                                      # noqa: BLE001
+        pass
+
+
+def window_title():
+    return f"{DISPLAY_NAME} v{GAME_VERSION}"
+
+
+def main():
+    args = parse_args()
+    pygame.init()
+    set_window_icon()                      # 要在 set_mode 之前，部分系统才会生效
+    screen = pygame.display.set_mode((INIT_W, INIT_H), pygame.RESIZABLE)
+    pygame.display.set_caption(window_title())
+    clock = pygame.time.Clock()
+    fonts = {"normal": load_font(16), "big": load_font(20), "small": load_font(14),
+             "warn": load_font(28), "title": load_font(44)}
+
+    # ---- 命令行直连（保留）：--host / --join 跳过菜单 ----
+    if args.host is not None or args.join:
+        session = None
+        if args.host is not None:
+            session = LockstepSession.host(port=args.host, seed=args.seed, delay=args.delay)
+            ip = get_lan_ip()
+            ok = wait_for_connection(screen, fonts["big"], clock, session, lambda: [
+                "你是主机，等待另一位玩家加入…", f"让对方运行:  python main.py --join {ip}:{session.port}"])
+        else:
+            host, _, port = args.join.partition(":")
+            session = LockstepSession.join(host, int(port) if port else DEFAULT_PORT)
+            ok = wait_for_connection(screen, fonts["big"], clock, session, lambda: ["正在连接主机…"])
+        if ok:
+            play(screen, clock, fonts, session, args.seed)
+        pygame.quit()
+        sys.exit()
+
+    # ---- 主菜单循环 ----
+    while True:
+        choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay})
+        if choice["mode"] == "quit":
+            break
+        session = choice.get("session")             # 单机为 None
+        leave, screen = play(screen, clock, fonts, session, args.seed)
+        if leave == "quit":
+            break
+        pygame.display.set_caption(window_title())
     pygame.quit()
     sys.exit()
 
 
 if __name__ == "__main__":
-    main()
+    setup_logging()                        # 打包成无控制台程序时，把输出接到日志文件
+    try:
+        main()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception:                      # noqa: BLE001  # 任何未捕获的错误：写崩溃日志并提示玩家
+        report_crash()
+        sys.exit(1)

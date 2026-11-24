@@ -77,6 +77,10 @@ class GameWorld:
         # cmd_delay  > 0：联机，指令排到 当前tick+cmd_delay 再统一执行，并进入 cmd_outbox 等待网络层发送。
         self.cmd_delay = cmd_delay
         self.local_player = local_player
+        # 回合计数：指令的"时钟"。每调用一次 sim_step() 加 1，【与是否暂停无关】。
+        # 暂停时世界不更新，但回合照走，这样"取消暂停"这条指令才能在联机时生效。
+        self.turn = 0
+        self.net_status = ""      # 联机状态文字（由 net.session 写入，只用于显示）
         self.cmd_seq = 0
         self.cmd_buffer = {}      # tick -> [cmd]
         self.cmd_outbox = []      # 本地新发出、待网络层发送的指令（仅 cmd_delay > 0 时记录）
@@ -156,7 +160,7 @@ class GameWorld:
         self.cmd_seq += 1
         cmd["p"] = self.local_player
         cmd["s"] = self.cmd_seq
-        cmd["tick"] = self.game_time.tick + self.cmd_delay
+        cmd["tick"] = self.turn + self.cmd_delay
         cmdlib.validate(cmd)
         if self.cmd_delay == 0:
             self._execute(cmd)
@@ -168,10 +172,11 @@ class GameWorld:
         """收到一条指令（自己发的或对方发来的）：排进对应 tick。"""
         self.cmd_buffer.setdefault(cmd["tick"], []).append(cmd)
 
-    def flush_commands(self):
-        """执行所有已到期的指令。顺序固定为 (tick, 玩家, 序号)，两端一致。"""
-        now = self.game_time.tick
-        due = [t for t in self.cmd_buffer if t <= now]
+    def flush_commands(self, force=False):
+        """执行所有已到期的指令。顺序固定为 (tick, 玩家, 序号)，两端一致。
+        force=True：不管到没到期全部执行（断线转单机时用）。"""
+        now = self.turn
+        due = [t for t in self.cmd_buffer if force or t <= now]
         if not due:
             return
         cmds = []
@@ -183,7 +188,7 @@ class GameWorld:
 
     def _execute(self, cmd):
         if self.cmd_log is not None:
-            self.cmd_log.append((self.game_time.tick, dict(cmd)))
+            self.cmd_log.append((self.turn, dict(cmd)))
         apply_command(self, cmd)
 
     def selected_colonists(self):
@@ -671,11 +676,18 @@ class GameWorld:
         return world_sections(self)
 
     def sim_step(self):
-        """推进模拟恰好一个 tick。固定步长 TICK_DT，与帧率、倍速、渲染完全无关。
-        由 main 的累加器循环调用；倍速 = 每秒调用的次数，而不是步长。"""
+        """推进一个回合：先执行本回合到期的玩家指令；若没有暂停，再推进世界一个 tick。
+        固定步长 TICK_DT，与帧率、倍速、渲染完全无关。
+        由 main 的累加器循环（单机）或 net.session（联机）调用。"""
+        self.flush_commands()
+        if self.game_speed > 0:
+            self._world_step()
+        self.turn += 1
+
+    def _world_step(self):
+        """推进世界恰好一个 tick（纯模拟）。"""
         dt = TICK_DT
 
-        self.flush_commands()     # 先执行本 tick 到期的玩家指令，再推进模拟
         self.game_time.update()
         self.farms.update(dt)
         self.room_mgr.update(dt)
@@ -866,6 +878,9 @@ class GameWorld:
         info = (f"{self.game_time.time_str()} | 速度 {speed_text} | 殖民者 {len(self.colonists)} | "
                 f"敌人 {len(self.enemies)} | 动物 {len(self.animals)}")
         surface.blit(self.font_big.render(info, True, WHITE), (10, 10))
+        if self.net_status:
+            ns = self.font.render(self.net_status, True, (255, 220, 120))
+            surface.blit(ns, (surface.get_width() - ns.get_width() - 12, 12))
 
         totals = self.get_totals()
         y0 = 10

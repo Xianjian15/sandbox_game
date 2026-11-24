@@ -1,4 +1,5 @@
 # entities/colonist.py
+import os
 import pygame
 import random
 import math
@@ -12,7 +13,7 @@ from combat.weapon_render import draw_weapon
 
 FOOD_KINDS = ("meal_fine", "meal_simple", "food", "meat")   # 能直接吃的东西
 
-DEBUG_BUILD = True  # 调试建造流程时打开，定位完关掉
+DEBUG_BUILD = os.environ.get("RW_DEBUG") == "1"  # 调试建造流程：运行前设环境变量 RW_DEBUG=1
 
 
 class Colonist:

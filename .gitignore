@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+
+# 打包产物（用 build.py 生成，不要提交）
+build/
+dist/
+*.spec
+
+# 运行时生成
+desync_report.json
+crash.log
+game.log
+game.log.old
+
+# IDE
+.idea/
+.vscode/

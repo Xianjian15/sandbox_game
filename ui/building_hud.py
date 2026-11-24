@@ -245,11 +245,13 @@ class BuildingHUD:
         if selected_building.kind == "stove":
             surface.blit(self.font.render("发布烹饪任务:", True, (200, 200, 100)), (x + 10, y + 95))
             surface.blit(self.font.render("(右键名称取消)", True, (150, 150, 150)), (x + 10, y + 115))
+            # 配方说明：简单食物 = 肉/浆果任意凑够 2 份；美味食物 = 必须 2 份肉 + 2 份浆果
+            surface.blit(self.font.render("美味=2肉+2浆果", True, (100, 200, 200)), (x + 125, y + 115))
             counts = self.get_counts(selected_building)
 
             self.name_rects["meal_simple"] = pygame.Rect(x + 10, y + 145, 100, 30)
             surface.blit(self.font.render("简单食物", True, (200, 220, 100)), (x + 10, y + 150))
-            surface.blit(self.font.render("(2食材)", True, (150, 150, 150)), (x + 85, y + 150))
+            surface.blit(self.font.render("(任意2)", True, (150, 150, 150)), (x + 85, y + 150))
             self.input_rects["meal_simple"] = pygame.Rect(x + 150, y + 145, 50, 30)
             pygame.draw.rect(surface, (50, 50, 50), self.input_rects["meal_simple"])
             if self.active_input == "meal_simple":
@@ -262,7 +264,7 @@ class BuildingHUD:
 
             self.name_rects["meal_fine"] = pygame.Rect(x + 10, y + 185, 100, 30)
             surface.blit(self.font.render("美味食物", True, (100, 220, 220)), (x + 10, y + 190))
-            surface.blit(self.font.render("(4食材)", True, (150, 150, 150)), (x + 85, y + 190))
+            surface.blit(self.font.render("(2肉2素)", True, (150, 150, 150)), (x + 85, y + 190))
             self.input_rects["meal_fine"] = pygame.Rect(x + 150, y + 185, 50, 30)
             pygame.draw.rect(surface, (50, 50, 50), self.input_rects["meal_fine"])
             if self.active_input == "meal_fine":
