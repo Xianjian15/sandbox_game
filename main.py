@@ -114,6 +114,11 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False):
     acc = 0.0            # 模拟时间累加器（单位：秒）
     debug_timer = 0.0
     confirm_exit = False
+    text_on = False
+    try:
+        pygame.key.stop_text_input()     # 菜单结束时已关；这里确保一致。只在编辑数字框时才打开（否则输入法会吃掉 B/S/F 等快捷键）
+    except Exception:                                                    # noqa: BLE001
+        pass
     leave = "quit"       # 循环结束后返回给 main 的去向："quit" 退出程序 / "menu" 回到主菜单
     while running:
         dt_raw = clock.tick(FPS) / 1000.0       # 真实帧时间：只用于渲染/UI/相机
@@ -179,6 +184,13 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False):
             screen_w, screen_h = screen.get_size()
             game.set_screen_size(screen_w, screen_h)
 
+        want = game.wants_text_input()
+        if want != text_on:                  # 熔炉/烹饪台/柜子的数字框：点进去才开启文字输入，退出编辑就关
+            text_on = want
+            try:
+                (pygame.key.start_text_input if want else pygame.key.stop_text_input)()
+            except Exception:                                            # noqa: BLE001
+                pass
         game.edge_scroll(pygame.mouse.get_pos(), screen_w, screen_h, dt_raw)      # 相机边缘滚动（菜单/教程打开时不滚）
 
         game.tick_ui(dt_raw)

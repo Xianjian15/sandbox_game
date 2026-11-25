@@ -503,6 +503,10 @@ class GameWorld:
         if not self.dragging_cam_right:
             self._handle_selection(event, screen_w, screen_h, shift_held)
 
+    def wants_text_input(self):
+        """当前是否有数字输入框（熔炉/烹饪台/柜子）处于编辑状态：main 据此开关系统文字输入。"""
+        return self.bhud.active_input is not None
+
     def edge_scroll(self, mouse_pos, screen_w, screen_h, dt_raw, edge_margin=20):
         """鼠标贴着窗口边缘时滚动视角（纯 UI，用真实时间）。菜单/教程打开时不滚——移动鼠标不会让地图动。"""
         if self.menu.active or self.tutorial.active or self.is_mouse_in_ui(mouse_pos):
