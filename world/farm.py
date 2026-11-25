@@ -30,15 +30,21 @@ class FarmZone:
                 speed = 0.005 if self.plant_type == "tree" else 0.02
                 data["growth"] = min(1.0, data["growth"] + speed * dt)
 
+    _OVERLAY = None
+
     def draw(self, surface, camera):
+        vx1, vy1, vx2, vy2 = camera.view_tiles()      # 只画屏幕内的格子；底色贴图只建一次
         for tx, ty in self.tiles():
+            if tx < vx1 or tx > vx2 or ty < vy1 or ty > vy2:
+                continue
             sx, sy = camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
             rect = pygame.Rect(sx, sy, TILE_SIZE, TILE_SIZE)
 
             # 画底色
-            s = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            s.fill((80, 60, 30, 40))
-            surface.blit(s, (sx, sy))
+            if FarmZone._OVERLAY is None:
+                FarmZone._OVERLAY = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+                FarmZone._OVERLAY.fill((80, 60, 30, 40))
+            surface.blit(FarmZone._OVERLAY, (sx, sy))
             pygame.draw.rect(surface, (139, 90, 43), rect, 1)
 
             data = self.plots[(tx, ty)]

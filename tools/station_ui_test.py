@@ -27,7 +27,7 @@ W, H = 1280, 720
 def mk():
     g = GameWorld(f, f, f, f, W, H, seed=2); g.set_screen_size(W, H); return g
 def put(g, kind, mat, x, y):
-    b = Building(kind, mat, x, y); g.buildings.buildings[(x, y, b.layer) if False else (x, y)] = b; g.selected_building = b; return b
+    b = Building(kind, mat, x, y); g.buildings.buildings[(x, y, b.layer)] = b; g.selected_building = b; return b
 def draw(g):
     s = pygame.Surface((g.ui_w, g.ui_h)); g._draw_ui(s, g.ui_w, g.ui_h); g.set_screen_size(W, H)
 def ev(g, t, **kw): g.handle_event(pygame.event.Event(t, **kw), W, H)

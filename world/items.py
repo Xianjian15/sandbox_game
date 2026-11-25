@@ -115,11 +115,19 @@ class ItemStack:
             d = ITEM_DEFS.get(self.kind, {"color": (200, 200, 200)})
             pygame.draw.rect(surface, d["color"], (sx - 6, sy - 6, 12, 12))
 
-        txt = font.render(str(self.amount), True, (255, 255, 255))
+        key = (id(font), self.amount)
+        pair = _TEXT_CACHE.get(key)
+        if pair is None:                       # 数字贴图按(字体, 数量)缓存：以前每个物品堆每帧渲染 5 次文字
+            if len(_TEXT_CACHE) > 2000: _TEXT_CACHE.clear()
+            pair = _TEXT_CACHE[key] = (font.render(str(self.amount), True, (255, 255, 255)),
+                                       font.render(str(self.amount), True, (0, 0, 0)))
+        txt, shadow = pair
         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            surface.blit(font.render(str(self.amount), True, (0, 0, 0)),
-                         (sx - txt.get_width() / 2 + dx, sy - txt.get_height() / 2 + dy))
+            surface.blit(shadow, (sx - txt.get_width() / 2 + dx, sy - txt.get_height() / 2 + dy))
         surface.blit(txt, (sx - txt.get_width() / 2, sy - txt.get_height() / 2))
+
+
+_TEXT_CACHE = {}
 
 
 class ItemManager:
@@ -146,4 +154,6 @@ class ItemManager:
         return [s for s in self.stacks.values() if s.tx == tx and s.ty == ty]
 
     def draw(self, surface, camera, font):
-        for s in self.stacks.values(): s.draw(surface, camera, font)
+        x1, y1, x2, y2 = camera.view_tiles()
+        for s in self.stacks.values():
+            if x1 <= s.tx <= x2 and y1 <= s.ty <= y2: s.draw(surface, camera, font)

@@ -42,7 +42,7 @@ for (w, h) in ((1280, 720), (1366, 768), (1920, 1080), (1024, 600)):
 # F2
 g = mk(1920, 1080)
 b = Building("workbench", "wood", 20, 20)
-g.buildings.buildings[(20, 20)] = b if hasattr(g.buildings, "buildings") else None
+g.buildings.buildings[(20, 20, b.layer)] = b
 g.selected_building = b
 surf = pygame.Surface((g.ui_w, g.ui_h))
 for _ in range(3):

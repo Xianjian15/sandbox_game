@@ -272,12 +272,21 @@ class BuildingManager:
                 if t is None or t == 3: return False
         return True
 
+    # 所有可能的层（高层优先）。字典键是 (x, y, layer)，按层直接查：O(层数)，不再扫描全部建筑。
+    # 旧写法每次都遍历整个建筑字典——房间扫描每 2 秒对每个地图格调用一次，建筑一多（游戏后期）就卡一下。
+    _LAYERS_DESC = tuple(sorted({d["layer"] for d in BUILDING_DEFS.values()}, reverse=True))
+
     def get_blueprints_at(self, tx, ty):
-        return [b for k, b in self.blueprints.items() if k[:2] == (tx, ty)]
+        bps = self.blueprints
+        return [bps[(tx, ty, ly)] for ly in sorted({d["layer"] for d in BUILDING_DEFS.values()}) if (tx, ty, ly) in bps]
 
     def get_building_at(self, tx, ty):
-        res = [b for k, b in self.buildings.items() if k[:2] == (tx, ty)]
-        return sorted(res, key=lambda b: b.layer, reverse=True)[0] if res else None
+        bs = self.buildings
+        for ly in self._LAYERS_DESC:
+            b = bs.get((tx, ty, ly))
+            if b is not None:
+                return b
+        return None
 
     def add_blueprint(self, kind, material, tx, ty, rotation=0):
         layer = BUILDING_DEFS[kind]["layer"]
@@ -350,7 +359,12 @@ class BuildingManager:
 
     def draw_layer(self, surface, camera, font, layer):
         drawn_bp, drawn_b = set(), set()
+        vis = camera.rect_visible
         for bp in self.blueprints.values():
-            if bp.layer == layer and bp not in drawn_bp: bp.draw(surface, camera, font); drawn_bp.add(bp)
+            if bp.layer == layer and bp not in drawn_bp:
+                drawn_bp.add(bp)
+                if vis(bp.tx, bp.ty, bp.w, bp.h): bp.draw(surface, camera, font)
         for b in self.buildings.values():
-            if b.layer == layer and b not in drawn_b: b.draw(surface, camera); drawn_b.add(b)
+            if b.layer == layer and b not in drawn_b:
+                drawn_b.add(b)
+                if vis(b.tx, b.ty, b.w, b.h): b.draw(surface, camera)

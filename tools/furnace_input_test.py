@@ -30,7 +30,7 @@ cmds = []
 orig = g.issue
 g.bhud.emit = lambda c: (cmds.append(c), orig(c))[1]
 b = Building("furnace", "stone", 30, 30)
-g.buildings.buildings[(30, 30)] = b
+g.buildings.buildings[(30, 30, b.layer)] = b
 g.selected_building = b
 s = pygame.Surface((g.ui_w, g.ui_h))
 def draw(): g._draw_ui(s, g.ui_w, g.ui_h); g.set_screen_size(W, H)

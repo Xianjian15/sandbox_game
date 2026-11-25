@@ -20,12 +20,22 @@ class Stockpile:
                 yield tx, ty
 
     def draw(self, surface, camera):
-        for tx, ty in self.tiles():
+        vx1, vy1, vx2, vy2 = camera.view_tiles()
+        # 只画屏幕内的格子；半透明底色贴图只建一次（以前每格每帧都新建一张 Surface）
+        for ty in range(max(self.y1, vy1), min(self.y2, vy2) + 1):
+            for tx in range(max(self.x1, vx1), min(self.x2, vx2) + 1):
+                self._draw_tile(surface, camera, tx, ty)
+
+    _OVERLAY = None
+
+    def _draw_tile(self, surface, camera, tx, ty):
+        if True:
             sx, sy = camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
             rect = pygame.Rect(sx, sy, TILE_SIZE, TILE_SIZE)
-            s = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            s.fill((80, 140, 220, 40))
-            surface.blit(s, (sx, sy))
+            if Stockpile._OVERLAY is None:
+                Stockpile._OVERLAY = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+                Stockpile._OVERLAY.fill((80, 140, 220, 40))
+            surface.blit(Stockpile._OVERLAY, (sx, sy))
             pygame.draw.rect(surface, (100, 170, 255), rect, 1)
 
 

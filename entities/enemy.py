@@ -30,6 +30,7 @@ class Enemy:
         self.attack_damage = w["damage"] * 0.7
         self.attack_cooldown = w["cooldown"] * 1.4
         self.cooldown_timer = 0.0
+        self.repath_cd = 0.0          # 找不到路后的重试冷却（秒）
 
         self.path = []
         self.target_enemy = None
@@ -51,6 +52,7 @@ class Enemy:
     def update(self, dt, world, colonists, buildings):
         self.cooldown_timer = max(0, self.cooldown_timer - dt)
         self.hit_flash = max(0, self.hit_flash - dt)
+        self.repath_cd = max(0.0, self.repath_cd - dt)
         if self.hp <= 0: return
 
         if self.target_enemy is None or self.target_enemy.hp <= 0:
@@ -81,7 +83,9 @@ class Enemy:
                 return
 
             # 如果不在攻击范围，且没有路，重新寻路
-            if not self.path:
+            # 后期卡顿的根源：敌人被围墙挡住时，每个 tick 都重新 A*（找不到路会搜满 500 格）并扫描全部墙体。
+            # 现在找不到路就冷却 1 秒再试；砸墙的目标选定后保持，不再每 tick 重选。
+            if not self.path and self.repath_cd <= 0:
                 adj = self._find_adjacent(world, self.current_tile(), *e.current_tile())
                 if adj:
                     p = astar(world, self.current_tile(), adj)
@@ -89,13 +93,18 @@ class Enemy:
 
                 # 【防卡死】如果找不到去殖民者的路，就砸最近的门或墙
                 if not self.path:
-                    candidates = [b for b in buildings.buildings.values() if
-                                  b.kind in ("wall", "window", "door") and not b.marked_for_deconstruction]
-                    if candidates:
-                        self.target_building = min(candidates, key=lambda b: (b.tx - self.x / TILE_SIZE) ** 2 + (
-                                    b.ty - self.y / TILE_SIZE) ** 2)
+                    self.repath_cd = 1.0
+                    if self.target_building is None or self.target_building.hp <= 0:
+                        candidates = [b for b in buildings.buildings.values() if
+                                      b.kind in ("wall", "window", "door") and not b.marked_for_deconstruction]
+                        if candidates:
+                            self.target_building = min(candidates, key=lambda b: (b.tx - self.x / TILE_SIZE) ** 2 + (
+                                        b.ty - self.y / TILE_SIZE) ** 2)
 
         # 处理砸墙
+        if self.target_building is not None and buildings.buildings.get(
+                (self.target_building.tx, self.target_building.ty, self.target_building.layer)) is not self.target_building:
+            self.target_building = None            # 目标墙已经被拆掉/被别人毁了
         if self.target_building is not None and (not self.path or self.target_enemy is None):
             b = self.target_building
             adj = self._find_adjacent(world, self.current_tile(), b.tx, b.ty)
@@ -114,9 +123,13 @@ class Enemy:
                             buildings.remove_building(b.tx, b.ty, b.layer)
                             self.target_building = None
                     return
-                elif not self.path:
+                elif not self.path and self.repath_cd <= 0:
                     p = astar(world, self.current_tile(), adj)
-                    if p: self.path = p
+                    if p:
+                        self.path = p
+                    else:
+                        self.repath_cd = 1.0           # 够不着这面墙：1 秒后换一个目标再试，别每 tick 都搜一遍
+                        self.target_building = None
             else:
                 self.target_building = None
 

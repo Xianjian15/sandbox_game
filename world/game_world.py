@@ -328,6 +328,16 @@ class GameWorld:
         return out
 
     def get_totals(self):
+        """资源总数（只用于显示）。要遍历全部物品堆和建筑，所以按真实时间每 0.25 秒才重算一次（暂停时也会刷新）。"""
+        key = (pygame.time.get_ticks() // 250, self.game_time.tick // 15)
+        cache = getattr(self, "_totals_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        totals = self._compute_totals()
+        self._totals_cache = (key, totals)
+        return totals
+
+    def _compute_totals(self):
         totals = {}
         for s in self.items.stacks.values():
             totals[s.kind] = totals.get(s.kind, 0) + s.amount
@@ -996,7 +1006,9 @@ class GameWorld:
 
         surface.fill(BLACK)
         self.world.draw(surface, self.camera)
+        vx1, vy1, vx2, vy2 = self.camera.view_tiles()
         for (tx, ty) in self.ctx.designated_harvests:
+            if tx < vx1 or tx > vx2 or ty < vy1 or ty > vy2: continue
             sx, sy = self.camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
             pygame.draw.rect(surface, (180, 220, 100),
                              (sx + 4, sy + 4, TILE_SIZE - 8, TILE_SIZE - 8), 2, border_radius=4)
