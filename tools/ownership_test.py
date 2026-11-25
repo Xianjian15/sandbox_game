@@ -67,6 +67,9 @@ def part_b():
     p0._handle_right_click((sx, sy), False)
     moves = [c for c in p0.cmd_outbox if c["t"] == "move"]
     check("右键只发给自己的小人", moves and moves[-1]["ids"] == [mine0.id])
+    for cmd in p0.cmd_outbox:                       # 把玩家0 发出的指令转交给玩家1 的世界（模拟网络）
+        p1.receive_command(cmd)
+    p0.cmd_outbox.clear()
 
     # 伪造越权指令：玩家0 的指令点名玩家1 的小人，两端执行后都不应动
     for g in (p0, p1):

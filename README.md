@@ -81,3 +81,11 @@ Linux `~/.local/share/SandboxGame/`（`crash.log`、`game.log`、`desync_report.
 - 资料只用于显示，不参与模拟与状态哈希；联机时随握手发给主机，主机清洗后把名单发给所有人。
 - 小人自动回血：规则在 `core/regen.py`，参数在 `settings.py`（REGEN_DELAY / REGEN_RATE）。
 - 测试：`python -m tools.profile_test`（回血、资料、名单、资料页流程）。
+
+## 界面自动缩放
+
+- 界面画在“逻辑尺寸”画布（窗口尺寸 ÷ 缩放比例）上，再整体平滑缩放到窗口；鼠标坐标反向换算。地图仍按真实分辨率绘制。
+- 缩放比例 = min(窗口宽/1280, 窗口高/720) × 玩家偏好（Ctrl +/-/0，存 `ui.json`），范围 0.6~3.0。比例恰为 1.0（1280×720）时直接画在屏幕上。
+- 实现在 `core/ui_scale.py`，游戏内接入见 `GameWorld._draw_ui / _L / handle_event`，菜单见 `run_menu`。新写的界面代码照旧按 1280×720 的像素值写即可，不用关心缩放；
+  但“点击判定”必须用换算后的逻辑坐标（`self._L(event.pos)`），地图相关仍用窗口坐标。
+- 测试：`python -m tools.ui_scale_test`（没装 pygame 时自动用 `tools/fake_pygame.py`，游戏本体照常运行）。

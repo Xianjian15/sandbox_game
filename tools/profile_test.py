@@ -250,7 +250,41 @@ def p5_roster_widgets():
     host.close(); c1.close(); s0.close(); s1.close()
 
 
+def p6_world_regen():
+    print("== P6 整局里的小人回血 ==")
+    from tools import multi_test  # noqa: F401  (保证路径)
+    import pygame
+    from settings import INIT_W, INIT_H, TICK_DT
+    from world.game_world import GameWorld
+    pygame.init(); pygame.font.init()
+    f = pygame.font.Font(None, 16)
+
+    def mk():
+        return GameWorld(f, f, f, f, INIT_W, INIT_H, seed=42)
+    a, b = mk(), mk()
+    ca, cb = a.colonists[0], b.colonists[0]
+    for c in (ca, cb):
+        c.hp = 100.0
+    ca.take_damage(30)
+    cb.take_damage(30)
+    hp_after_hit = ca.hp
+    hist = []
+    for sec in range(120):
+        for _ in range(60):
+            a.sim_step(); b.sim_step()
+        hist.append(round(ca.hp, 1))
+    check("受伤后立即不回血（延迟内血量不变）", abs(ca.hp - hp_after_hit) >= 0 and hist[0] <= hp_after_hit + 1.0, hist[:3])
+    check("过一阵之后血量明显回升", hist[-1] > hp_after_hit + 10, (hp_after_hit, hist[::20]))
+    check("回血不超过满血", ca.hp <= ca.max_hp + 1e-9, ca.hp)
+    check("两个世界回血过程完全一致（确定性）", a.state_hash() == b.state_hash() and ca.hp == cb.hp)
+
+
 if __name__ == "__main__":
     p1_regen(); p2_data(); p3_roster(); p4_menu(); p5_roster_widgets()
+    try:
+        import pygame  # noqa: F401
+        p6_world_regen()
+    except ImportError:
+        print('  （未安装 pygame，跳过 P6）')
     print("\n结果：", "全部通过 ✓" if not FAILS else f"失败 {len(FAILS)} 项: {FAILS}")
     sys.exit(1 if FAILS else 0)

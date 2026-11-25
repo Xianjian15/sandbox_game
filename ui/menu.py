@@ -526,7 +526,12 @@ def draw_menu(screen, fonts, model):
 def run_menu(screen, fonts, clock, cfg=None):
     """显示菜单直到玩家做出选择，返回 {"mode": "single"/"host"/"join"/"quit", ["session": ...]}。"""
     import pygame
+    from core import ui_scale as uis
+    cfg = cfg or {}
     model = MenuModel(cfg)
+    pref = cfg.get("ui_pref", uis.DEFAULT_PREF)
+    on_pref = cfg.get("on_ui_pref")
+    layer = uis.UiLayer(alpha=False)
     try:
         pygame.key.start_text_input()
     except Exception:                                                    # noqa: BLE001
@@ -536,15 +541,21 @@ def run_menu(screen, fonts, clock, cfg=None):
     try:
         while model.result is None:
             for event in pygame.event.get():
-                w, h = screen.get_size()
+                # 菜单画在"逻辑尺寸"画布上再缩放：点击坐标要换算回逻辑坐标
+                scale = uis.compute_scale(*screen.get_size(), pref)
+                w, h = uis.logical_size(*screen.get_size(), scale)
+                if event.type == pygame.KEYDOWN and uis.pref_delta_for_key(event.key, event.mod) is not None:
+                    delta = uis.pref_delta_for_key(event.key, event.mod)
+                    pref = on_pref(delta) if on_pref else uis.step_pref(pref, delta)
+                    continue
                 if event.type == pygame.QUIT:
                     model.result = {"mode": "quit"}
                 elif event.type == pygame.VIDEORESIZE:
                     screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
                 elif event.type == pygame.MOUSEMOTION:
-                    model.hover(event.pos, w, h)
+                    model.hover(uis.to_logical(event.pos, scale), w, h)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    model.click(event.pos, w, h)
+                    model.click(uis.to_logical(event.pos, scale), w, h)
                 elif event.type == pygame.KEYDOWN and event.key in keymap:
                     model.key(keymap[event.key])
                 elif event.type == pygame.TEXTINPUT:
@@ -552,7 +563,9 @@ def run_menu(screen, fonts, clock, cfg=None):
                 elif event.type == pygame.DROPFILE:
                     model.drop_file(event.file)
             model.update()
-            draw_menu(screen, fonts, model)
+            scale = uis.compute_scale(*screen.get_size(), pref)
+            draw_menu(layer.begin(screen, scale), fonts, model)
+            layer.end(screen)
             pygame.display.flip()
             clock.tick(30)
     finally:

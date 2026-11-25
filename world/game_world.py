@@ -3,6 +3,7 @@ import random
 import pygame
 
 from core.profile import PLAYER_COLORS
+from core.ui_scale import compute_scale, logical_size, to_logical, UiLayer, pref_text
 from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT, START_COLONISTS
 from core.camera import Camera
 from core.time_system import GameTime
@@ -72,6 +73,15 @@ class GameWorld:
         self.build_menu = BuildMenu(font)
         self.toolbar = Toolbar(font)
         self.research_menu = ResearchMenu(font)
+
+        # ---- 界面自动缩放：界面画在"逻辑尺寸"画布上再整体缩放；地图仍按真实分辨率画 ----
+        self.ui_pref = 1.0                 # 玩家偏好倍数（Ctrl +/-），main 读写
+        self.ui_scale = 1.0
+        self.ui_w, self.ui_h = screen_w, screen_h        # 界面逻辑尺寸（所有面板/点击判定都用它）
+        self.native_size = (screen_w, screen_h)
+        self.ui_layer = UiLayer(alpha=True)
+        self.toast_text, self.toast_timer = "", 0.0
+        self._update_ui_scale(screen_w, screen_h)
 
         # —— 指令系统：UI 不直接改模拟状态，一律 issue(指令) ——
         # cmd_delay == 0：单机，指令当场执行（行为与重构前完全一致）；
@@ -262,7 +272,30 @@ class GameWorld:
     def selected_colonists(self):
         return [c for c in self.colonists if c.selected and c.owner_id == self.local_player]
 
+    # ---------------- 界面缩放 ----------------
+    def _update_ui_scale(self, w, h):
+        """窗口尺寸/偏好变了就重算缩放比例和界面逻辑尺寸（每帧调用，很便宜）。"""
+        self.native_size = (w, h)
+        s = compute_scale(w, h, self.ui_pref)
+        lw, lh = logical_size(w, h, s)
+        self.ui_scale = s
+        if (lw, lh) != (self.ui_w, self.ui_h) or not hasattr(self, "_ui_inited"):
+            self.ui_w, self.ui_h = lw, lh
+            self._ui_inited = True
+        self.bhud.panel_rect.x = lw - self.bhud.panel_w - 20       # 右侧面板贴着逻辑画面的右边
+
+    def _L(self, pos):
+        """窗口坐标 → 界面逻辑坐标。界面的点击判定一律用它；地图相关（相机/选择框）仍用窗口坐标。"""
+        return to_logical(pos, self.ui_scale)
+
+    def set_ui_pref(self, pref):
+        self.ui_pref = pref
+        self._update_ui_scale(*self.native_size)
+        self.toast_text, self.toast_timer = pref_text(pref), 1.5
+
     def is_mouse_in_ui(self, mouse_pos):
+        """mouse_pos 是窗口坐标（pygame.mouse.get_pos()）。"""
+        mouse_pos = self._L(mouse_pos)
         selected_cols = self.selected_colonists()
         if self.hud.panel_rect.collidepoint(mouse_pos) and selected_cols: return True
         if self.bhud.panel_rect.collidepoint(mouse_pos) and self.selected_building: return True
@@ -313,9 +346,12 @@ class GameWorld:
 
     def set_screen_size(self, w, h):
         self.camera.resize(w, h)
-        self.bhud.panel_rect.x = w - self.bhud.panel_w - 20
+        self._update_ui_scale(w, h)
 
     def handle_event(self, event, screen_w, screen_h):
+        self._update_ui_scale(screen_w, screen_h)
+        lw, lh = self.ui_w, self.ui_h                       # 界面逻辑尺寸
+        lpos = self._L(event.pos) if hasattr(event, "pos") else None     # 事件位置的界面逻辑坐标
         mouse_pos = pygame.mouse.get_pos()
         shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
         mouse_in_ui = self.is_mouse_in_ui(mouse_pos)
@@ -333,7 +369,7 @@ class GameWorld:
             return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-            if self.bhud.handle_right_click(event.pos, self.selected_building): return
+            if self.bhud.handle_right_click(lpos, self.selected_building): return
             if not mouse_in_ui:
                 self.dragging_cam_right = True
                 self.right_down_pos = event.pos
@@ -356,21 +392,21 @@ class GameWorld:
             return
 
         if self.mode == "farm" and self.pending_farm_rect:
-            self._handle_farm_popup(event, screen_w, screen_h)
+            self._handle_farm_popup(event, lpos, lw, lh)
             return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             selected_cols = self.selected_colonists()
-            if self.hud.handle_click(event.pos, selected_cols):
+            if self.hud.handle_click(lpos, selected_cols):
                 self.left_down_pos = None; return
 
-            consumed, action = self.bhud.handle_click(event.pos, self.selected_building,
+            consumed, action = self.bhud.handle_click(lpos, self.selected_building,
                                                       self.get_global_items(), self.research_mgr)
             if consumed:
                 self._handle_building_hud_action(action)
                 self.left_down_pos = None; return
 
-            consumed_sp, delete_sp = self.shud.handle_click(event.pos)
+            consumed_sp, delete_sp = self.shud.handle_click(lpos)
             if consumed_sp:
                 if delete_sp and self.selected_stockpile in self.stockpiles.stockpiles:
                     sp = self.selected_stockpile
@@ -378,7 +414,7 @@ class GameWorld:
                     self.selected_stockpile = None
                 self.left_down_pos = None; return
 
-            if self.ihud.handle_click(event.pos):
+            if self.ihud.handle_click(lpos):
                 self.left_down_pos = None; return
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -386,7 +422,7 @@ class GameWorld:
                 self.left_down_pos = None; return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            clicked_mode = self.toolbar.handle_click(event.pos)
+            clicked_mode = self.toolbar.handle_click(lpos)
             if clicked_mode != "NOT_CLICKED":
                 if clicked_mode == "close":
                     self.mode = None
@@ -404,8 +440,8 @@ class GameWorld:
                 self.left_down_pos = None
                 return
             bottom_h = self.get_bottom_ui_height()
-            if self.mode == "build" and event.pos[1] > screen_h - bottom_h:
-                k, m, is_selected = self.build_menu.handle_click(event.pos, self.research_mgr)
+            if self.mode == "build" and lpos[1] > lh - bottom_h:
+                k, m, is_selected = self.build_menu.handle_click(lpos, self.research_mgr)
                 if is_selected:
                     self.current_build_kind = k
                     self.current_build_mat = m
@@ -413,10 +449,10 @@ class GameWorld:
                 self.left_down_pos = None
                 return
             if self.mode == "research":
-                if self.research_menu.handle_click(event.pos, self.research_mgr):
+                if self.research_menu.handle_click(lpos, self.research_mgr):
                     self.left_down_pos = None
                     return
-                if self.research_menu.panel_rect.collidepoint(event.pos):
+                if self.research_menu.panel_rect.collidepoint(lpos):
                     self.left_down_pos = None
                     return
 
@@ -567,21 +603,22 @@ class GameWorld:
             self.issue(cmdlib.make("take", ids=ids, tx=b.tx, ty=b.ty, layer=b.layer,
                                    kind=take_kind, amt=int(take_amt)))
 
-    def _handle_farm_popup(self, event, screen_w, screen_h):
+    def _handle_farm_popup(self, event, pos, screen_w, screen_h):
+        """pos / screen_w / screen_h 都是界面逻辑坐标（弹窗是界面的一部分）。"""
         if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
             return
         r = self.pending_farm_rect
-        if pygame.Rect(screen_w // 2 - 180, screen_h // 2 - 30, 160, 50).collidepoint(event.pos):
+        if pygame.Rect(screen_w // 2 - 180, screen_h // 2 - 30, 160, 50).collidepoint(pos):
             if self.research_mgr.can_plant("berry"):
                 self.issue(cmdlib.make("farm_add", x1=r[0], y1=r[1], x2=r[2], y2=r[3], plant="berry"))
                 self.pending_farm_rect = None
                 self.mode = None
-        elif pygame.Rect(screen_w // 2 + 20, screen_h // 2 - 30, 160, 50).collidepoint(event.pos):
+        elif pygame.Rect(screen_w // 2 + 20, screen_h // 2 - 30, 160, 50).collidepoint(pos):
             if self.research_mgr.can_plant("tree"):
                 self.issue(cmdlib.make("farm_add", x1=r[0], y1=r[1], x2=r[2], y2=r[3], plant="tree"))
                 self.pending_farm_rect = None
                 self.mode = None
-        elif pygame.Rect(screen_w // 2 - 50, screen_h // 2 + 60, 100, 30).collidepoint(event.pos):
+        elif pygame.Rect(screen_w // 2 - 50, screen_h // 2 + 60, 100, 30).collidepoint(pos):
             self.pending_farm_rect = None
 
     def _handle_drag_mode(self, event, screen_w, screen_h):
@@ -590,7 +627,7 @@ class GameWorld:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.mode == "build" and (self.current_build_kind is None or self.current_build_mat is None):
                 return
-            if event.pos[1] < screen_h - bottom_h:
+            if self._L(event.pos)[1] < self.ui_h - bottom_h:        # 点在底部工具栏/菜单上不算框地图
                 self.drag_start = self.camera.screen_to_tile(*event.pos)
                 self.drag_end = self.drag_start
         elif event.type == pygame.MOUSEMOTION and self.drag_start:
@@ -695,7 +732,7 @@ class GameWorld:
             self.selected_building = None
             self.selected_stockpile = hit_sp
             self.selected_item_stack = None
-            self.shud.set_target(hit_sp, pos, screen_w, screen_h)
+            self.shud.set_target(hit_sp, self._L(pos), self.ui_w, self.ui_h)
             return
 
         if not shift_held:
@@ -705,6 +742,8 @@ class GameWorld:
             self.selected_item_stack = None
 
     def tick_ui(self, dt_raw):
+        if self.toast_timer > 0:
+            self.toast_timer -= dt_raw
         if self.warning_timer > 0:
             self.warning_timer -= dt_raw
         else:
@@ -844,7 +883,9 @@ class GameWorld:
 
     def draw(self, surface, dt_raw):
         screen_w, screen_h = surface.get_size()
+        self._update_ui_scale(screen_w, screen_h)
         mouse_pos = pygame.mouse.get_pos()
+        lmouse = self._L(mouse_pos)
 
         surface.fill(BLACK)
         self.world.draw(surface, self.camera)
@@ -916,7 +957,7 @@ class GameWorld:
 
         bottom_h = self.get_bottom_ui_height()
         if self.mode == "build" and self.current_build_kind and self.current_build_mat and not self.drag_start:
-            if mouse_pos[1] < screen_h - bottom_h:
+            if lmouse[1] < self.ui_h - bottom_h:                     # 鼠标在底部界面上时不画建造预览
                 tx, ty = self.camera.screen_to_tile(*mouse_pos)
                 if self.buildings.can_place(self.world, tx, ty,
                                             self.current_build_kind, self.current_build_mat,
@@ -947,6 +988,13 @@ class GameWorld:
             shade.set_alpha(int((1.0 - light) * 160))
             surface.blit(shade, (0, 0))
 
+        # ---- 界面：画在逻辑尺寸画布上再缩放叠加（缩放为 1.0 时直接画在屏幕上）----
+        ui = self.ui_layer.begin(surface, self.ui_scale)
+        self._draw_ui(ui, self.ui_w, self.ui_h)
+        self.ui_layer.end(surface)
+
+    def _draw_ui(self, surface, screen_w, screen_h):
+        """所有界面元素。surface / screen_w / screen_h 都是界面逻辑尺寸下的。"""
         speed_text = "暂停" if self.game_speed == 0 else f"{int(self.game_speed)}x"
         info = (f"{self.game_time.time_str()} | 速度 {speed_text} | 殖民者 {len(self.colonists)} | "
                 f"敌人 {len(self.enemies)} | 动物 {len(self.animals)}")
@@ -1035,9 +1083,18 @@ class GameWorld:
                 "R : 建造时旋转 / 开启科技树",
                 "H / Esc : 打开/关闭此帮助面板",
                 "F11 : 切换全屏模式",
+                "Ctrl + / Ctrl - : 放大 / 缩小界面（Ctrl 0 复位）",
                 "T : 切换 房间美观度 透视"
             ]
             for i, txt in enumerate(keys_text):
                 line = self.font.render(txt, True, WHITE)
                 help_surf.blit(line, (30, 60 + i * 26))
             surface.blit(help_surf, (screen_w // 2 - 300, screen_h // 2 - 240))
+
+        if self.toast_timer > 0 and self.toast_text:
+            t = self.font_big.render(self.toast_text, True, (255, 255, 255))
+            bg = pygame.Surface((t.get_width() + 24, t.get_height() + 12), pygame.SRCALPHA)
+            bg.fill((0, 0, 0, 190))
+            x0, y0 = screen_w // 2 - bg.get_width() // 2, screen_h // 2 - 150
+            surface.blit(bg, (x0, y0))
+            surface.blit(t, (x0 + 12, y0 + 6))

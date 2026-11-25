@@ -13,6 +13,18 @@ from ui.fonts import load_font, font_source
 from core.app_paths import setup_logging, report_crash, data_file, resource_path
 from core.version import GAME_VERSION, DISPLAY_NAME
 from core.profile import Profile, sanitize_name
+from core import ui_scale as uis
+
+UI_STATE = {"pref": uis.DEFAULT_PREF}        # 玩家的界面大小偏好（Ctrl +/- 调整，存 ui.json）
+_MSG_LAYER = uis.UiLayer(alpha=False)
+_CONFIRM_LAYER = uis.UiLayer(alpha=True)
+
+
+def change_ui_pref(delta):
+    """调整并保存界面大小偏好，返回新的偏好值。"""
+    UI_STATE["pref"] = uis.step_pref(UI_STATE["pref"], delta)
+    uis.save_pref(data_file("ui.json"), UI_STATE["pref"])
+    return UI_STATE["pref"]
 
 # 调试：每秒打印一次"自认为在忙"的小人状态（排查卡死用）
 DEBUG_BUSY = os.environ.get("RW_DEBUG") == "1"      # 设环境变量 RW_DEBUG=1 打开调试输出
@@ -32,12 +44,15 @@ def parse_args():
 
 
 def show_message(screen, font, lines):
-    screen.fill((20, 20, 25))
-    y = screen.get_height() // 2 - 20 * len(lines) // 2
+    scale = uis.compute_scale(*screen.get_size(), UI_STATE["pref"])
+    ui = _MSG_LAYER.begin(screen, scale)               # 文字随窗口大小缩放
+    ui.fill((20, 20, 25))
+    y = ui.get_height() // 2 - 20 * len(lines) // 2
     for text in lines:
         surf = font.render(text, True, (230, 230, 230))
-        screen.blit(surf, (screen.get_width() // 2 - surf.get_width() // 2, y))
+        ui.blit(surf, (ui.get_width() // 2 - surf.get_width() // 2, y))
         y += 30
+    _MSG_LAYER.end(screen)
     pygame.display.flip()
 
 
@@ -58,17 +73,20 @@ def wait_for_connection(screen, font, clock, session, lines_fn):
     return True
 
 
-def draw_confirm(screen, font, online):
+def draw_confirm(screen, font, online, scale=1.0):
     w, h = screen.get_size()
     veil = pygame.Surface((w, h), pygame.SRCALPHA)
     veil.fill((0, 0, 0, 150))
     screen.blit(veil, (0, 0))
+    screen_real, screen = screen, _CONFIRM_LAYER.begin(screen, scale)       # 文字部分按界面缩放
+    w, h = screen.get_size()
     lines = ["返回主菜单？", "联机中返回会断开与对方的连接" if online else "当前进度不会保存", "Y / Enter 确认      N / Esc 取消"]
     y = h // 2 - 50
     for i, text in enumerate(lines):
         surf = font.render(text, True, (255, 255, 255) if i != 1 else (255, 200, 120))
         screen.blit(surf, (w // 2 - surf.get_width() // 2, y))
         y += 34
+    _CONFIRM_LAYER.end(screen_real)
 
 
 def play(screen, clock, fonts, session, seed):
@@ -84,6 +102,8 @@ def play(screen, clock, fonts, session, seed):
         game.set_profiles(session.roster)          # 顶部玩家栏 + 小人头顶的用户名
     else:
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)
+    game.ui_pref = UI_STATE["pref"]
+    game.set_screen_size(*screen.get_size())          # 按当前窗口大小初始化相机和界面缩放
     desync_dumped = False
     is_fullscreen = False
     running = True
@@ -112,6 +132,12 @@ def play(screen, clock, fonts, session, seed):
             if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
                 confirm_exit = True
                 continue
+
+            if event.type == pygame.KEYDOWN:                # Ctrl + / Ctrl - / Ctrl 0：调整界面大小
+                delta = uis.pref_delta_for_key(event.key, event.mod)
+                if delta is not None:
+                    game.set_ui_pref(change_ui_pref(delta))
+                    continue
 
             if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                 is_fullscreen = not is_fullscreen
@@ -194,7 +220,7 @@ def play(screen, clock, fonts, session, seed):
 
         game.draw(screen, dt_raw)
         if confirm_exit:
-            draw_confirm(screen, fonts["big"], session is not None)
+            draw_confirm(screen, fonts["big"], session is not None, game.ui_scale)
         pygame.display.flip()
 
     if session is not None:
@@ -224,6 +250,7 @@ def main():
     fonts = {"normal": load_font(16), "big": load_font(20), "small": load_font(14),
              "warn": load_font(28), "title": load_font(44)}
 
+    UI_STATE["pref"] = uis.load_pref(data_file("ui.json"))
     profile = Profile.load(data_file("profile.json"))        # 本机玩家资料（用户名 + 头像），菜单里可修改
     if args.name:
         profile.name = sanitize_name(args.name, profile.name)
@@ -248,7 +275,8 @@ def main():
 
     # ---- 主菜单循环 ----
     while True:
-        choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay, "profile": profile})
+        choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay, "profile": profile,
+                                                    "ui_pref": UI_STATE["pref"], "on_ui_pref": change_ui_pref})
         if choice["mode"] == "quit":
             break
         session = choice.get("session")             # 单机为 None
