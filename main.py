@@ -160,15 +160,26 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False):
 
             game.handle_event(event, screen_w, screen_h)
 
-        # 相机边缘滚动（纯 UI，用真实时间）
-        mouse_pos = pygame.mouse.get_pos()
-        edge_margin = 20
-        scroll_speed = 600 * dt_raw
-        if not game.is_mouse_in_ui(mouse_pos):
-            if mouse_pos[0] < edge_margin: game.camera.move_by(-scroll_speed, 0)
-            elif mouse_pos[0] > screen_w - edge_margin: game.camera.move_by(scroll_speed, 0)
-            if mouse_pos[1] < edge_margin: game.camera.move_by(0, -scroll_speed)
-            elif mouse_pos[1] > screen_h - edge_margin: game.camera.move_by(0, scroll_speed)
+        # 游戏菜单发来的请求（只有 main 能改窗口 / 退出）
+        req, game.app_request = game.app_request, None
+        if req == "quit":
+            running = False
+            continue
+        elif req == "menu":
+            confirm_exit = True
+        elif req in ("ui_plus", "ui_minus"):
+            game.set_ui_pref(change_ui_pref(1 if req == "ui_plus" else -1))
+            game.toast_timer = 0                         # 菜单里已经显示了百分比，不再弹提示
+        elif req == "fullscreen":
+            is_fullscreen = not is_fullscreen
+            if is_fullscreen:
+                screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+            else:
+                screen = pygame.display.set_mode((INIT_W, INIT_H), pygame.RESIZABLE)
+            screen_w, screen_h = screen.get_size()
+            game.set_screen_size(screen_w, screen_h)
+
+        game.edge_scroll(pygame.mouse.get_pos(), screen_w, screen_h, dt_raw)      # 相机边缘滚动（菜单/教程打开时不滚）
 
         game.tick_ui(dt_raw)
 

@@ -3,6 +3,7 @@ import random
 import pygame
 
 from ui.tutorial import Tutorial
+from ui.game_menu import GameMenu
 from core.profile import PLAYER_COLORS
 from core.ui_scale import compute_scale, logical_size, to_logical, UiLayer, pref_text
 from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT, START_COLONISTS
@@ -156,6 +157,8 @@ class GameWorld:
         self.current_build_mat = None
         self.build_rotation = 0
         self.show_help = False
+        self.menu = GameMenu()                           # 游戏中菜单（M）
+        self.app_request = None                          # 需要 main 处理的请求：fullscreen/menu/quit/ui_plus/ui_minus
         self.tutorial = Tutorial()                       # 新手教程（F1 / 首次启动 / 主菜单）
         self.show_beauty = False
 
@@ -374,6 +377,19 @@ class GameWorld:
                 self.tutorial.handle_click(lpos)
             return
 
+        if self.menu.active:                                # 菜单打开时：吞掉所有输入（含鼠标移动、滚屏、拖拽）
+            self.menu.ui_pref_text = pref_text(self.ui_pref).replace("界面大小 ", "")
+            act = None
+            if event.type == pygame.KEYDOWN:
+                act = self.menu.handle_key(event.key)
+            elif event.type == pygame.MOUSEMOTION and lpos is not None:
+                self.menu.handle_motion(lpos)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and lpos is not None:
+                act = self.menu.handle_click(lpos)
+            if act:
+                self._menu_action(act)
+            return
+
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
             self.tutorial.open()
             return
@@ -487,7 +503,36 @@ class GameWorld:
         if not self.dragging_cam_right:
             self._handle_selection(event, screen_w, screen_h, shift_held)
 
+    def edge_scroll(self, mouse_pos, screen_w, screen_h, dt_raw, edge_margin=20):
+        """鼠标贴着窗口边缘时滚动视角（纯 UI，用真实时间）。菜单/教程打开时不滚——移动鼠标不会让地图动。"""
+        if self.menu.active or self.tutorial.active or self.is_mouse_in_ui(mouse_pos):
+            return
+        v = 600 * dt_raw
+        if mouse_pos[0] < edge_margin: self.camera.move_by(-v, 0)
+        elif mouse_pos[0] > screen_w - edge_margin: self.camera.move_by(v, 0)
+        if mouse_pos[1] < edge_margin: self.camera.move_by(0, -v)
+        elif mouse_pos[1] > screen_h - edge_margin: self.camera.move_by(0, v)
+
+    def _menu_action(self, act):
+        if act == "resume":
+            self.menu.close()
+        elif act == "tutorial":
+            self.menu.close(); self.tutorial.open()
+        elif act == "help":
+            self.menu.close(); self.show_help = True
+        else:
+            self.app_request = act            # fullscreen / menu / quit / ui_plus / ui_minus：由 main 处理
+            if act not in ("ui_plus", "ui_minus"):
+                self.menu.close()
+
     def _handle_keydown(self, event, mouse_pos, screen_w, screen_h):
+        if event.key == pygame.K_m:
+            self.show_help = False
+            self.dragging_cam_right = False                 # 打开菜单时中断拖拽，避免松开鼠标的事件被吞后一直"拖着"
+            self.drag_start = self.drag_end = None
+            self.left_down_pos = None
+            self.menu.open()
+            return
         if event.key == pygame.K_SPACE:
             nxt = {0: 1, 1: 2, 2: 3}.get(int(self.game_speed), 0)
             self.issue(cmdlib.make("speed", v=nxt))
@@ -1140,7 +1185,7 @@ class GameWorld:
                 "B : 建造菜单   |   F : 划定农业区",
                 "S : 划定库存   |   X : 拆除/删除模式",
                 "R : 建造时旋转 / 开启科技树",
-                "H / Esc : 打开/关闭此帮助面板   |   F1 : 新手教程",
+                "H / Esc : 打开/关闭此帮助面板   |   F1 : 新手教程   |   M : 游戏菜单",
                 "F11 : 切换全屏模式",
                 "Ctrl + / Ctrl - : 放大 / 缩小界面（Ctrl 0 复位）",
                 "T : 切换 房间美观度 透视"
@@ -1150,6 +1195,8 @@ class GameWorld:
                 help_surf.blit(line, (30, 60 + i * 26))
             surface.blit(help_surf, (screen_w // 2 - 300, screen_h // 2 - 240))
 
+        self.menu.ui_pref_text = pref_text(self.ui_pref).replace("界面大小 ", "")
+        self.menu.draw(surface, screen_w, screen_h, self.font, self.font_big)
         self.tutorial.draw(surface, screen_w, screen_h, self.font, self.font_big)
 
         if self.toast_timer > 0 and self.toast_text:
