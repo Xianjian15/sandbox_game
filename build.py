@@ -35,7 +35,7 @@ from core.version import DISPLAY_NAME, EXE_NAME, GAME_VERSION          # noqa: E
 
 # 只在函数内部或被间接导入的模块，显式告诉 PyInstaller（自检里也会提醒新增的动态导入）
 HIDDEN_IMPORTS = ["core.state_hash", "core.commands", "world.command_exec"]
-EXCLUDES = ["tkinter"]                    # 游戏没用到的大块标准库，排除后更小
+EXCLUDES = []                            # 注意：不能排除 tkinter——选择头像的文件窗口要用它
 PLAYER_README = os.path.join(ROOT, "assets", "玩家说明.txt")
 
 

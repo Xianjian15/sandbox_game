@@ -12,16 +12,20 @@ from ui.menu import run_menu
 from ui.fonts import load_font, font_source
 from core.app_paths import setup_logging, report_crash, data_file, resource_path
 from core.version import GAME_VERSION, DISPLAY_NAME
+from core.profile import Profile, sanitize_name
 
 # 调试：每秒打印一次"自认为在忙"的小人状态（排查卡死用）
 DEBUG_BUSY = os.environ.get("RW_DEBUG") == "1"      # 设环境变量 RW_DEBUG=1 打开调试输出
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="RimWorld-like 沙盒（支持局域网双人联机）")
+    ap = argparse.ArgumentParser(description="RimWorld-like 沙盒（支持局域网 2~4 人联机）")
     ap.add_argument("--host", nargs="?", const=DEFAULT_PORT, type=int, metavar="PORT",
                     help=f"作为主机开一局联机游戏（默认端口 {DEFAULT_PORT}）")
     ap.add_argument("--join", metavar="IP[:PORT]", help="加入主机的联机游戏，例如 192.168.1.5 或 192.168.1.5:47777")
+    ap.add_argument("--players", type=int, default=2, choices=range(2, 5), metavar="N",
+                    help="（主机，配合 --host）凑够 N 人（2~4，含自己）自动开始，默认 2")
+    ap.add_argument("--name", metavar="用户名", help="（命令行直连时）临时使用的用户名；平时在菜单「个人资料」里设置")
     ap.add_argument("--delay", type=int, default=4, help="联机输入延迟（回合数，默认 4；网络差就调大）")
     ap.add_argument("--seed", type=int, default=42, help="（主机）地图/随机种子")
     return ap.parse_args()
@@ -74,8 +78,10 @@ def play(screen, clock, fonts, session, seed):
         cfg = session.cfg
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H,
                          seed=cfg["seed"], map_seed=cfg["map_seed"],
-                         cmd_delay=cfg["delay"], local_player=cfg["player"], num_players=2)
+                         cmd_delay=cfg["delay"], local_player=cfg["player"],
+                         num_players=cfg.get("players", 2))
         session.attach(game)
+        game.set_profiles(session.roster)          # 顶部玩家栏 + 小人头顶的用户名
     else:
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)
     desync_dumped = False
@@ -218,17 +224,22 @@ def main():
     fonts = {"normal": load_font(16), "big": load_font(20), "small": load_font(14),
              "warn": load_font(28), "title": load_font(44)}
 
+    profile = Profile.load(data_file("profile.json"))        # 本机玩家资料（用户名 + 头像），菜单里可修改
+    if args.name:
+        profile.name = sanitize_name(args.name, profile.name)
+
     # ---- 命令行直连（保留）：--host / --join 跳过菜单 ----
     if args.host is not None or args.join:
         session = None
         if args.host is not None:
-            session = LockstepSession.host(port=args.host, seed=args.seed, delay=args.delay)
+            session = LockstepSession.host(port=args.host, seed=args.seed, delay=args.delay,
+                                           expect=max(1, args.players - 1), profile=profile.to_wire())
             ip = get_lan_ip()
             ok = wait_for_connection(screen, fonts["big"], clock, session, lambda: [
-                "你是主机，等待另一位玩家加入…", f"让对方运行:  python main.py --join {ip}:{session.port}"])
+                f"你是主机，等待其他玩家加入（凑够 {args.players} 人自动开始）…", f"让其他人运行:  python main.py --join {ip}:{session.port}"])
         else:
             host, _, port = args.join.partition(":")
-            session = LockstepSession.join(host, int(port) if port else DEFAULT_PORT)
+            session = LockstepSession.join(host, int(port) if port else DEFAULT_PORT, profile=profile.to_wire())
             ok = wait_for_connection(screen, fonts["big"], clock, session, lambda: ["正在连接主机…"])
         if ok:
             play(screen, clock, fonts, session, args.seed)
@@ -237,7 +248,7 @@ def main():
 
     # ---- 主菜单循环 ----
     while True:
-        choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay})
+        choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay, "profile": profile})
         if choice["mode"] == "quit":
             break
         session = choice.get("session")             # 单机为 None

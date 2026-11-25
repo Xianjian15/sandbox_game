@@ -29,5 +29,8 @@ GRAY = (120, 120, 120)
 # 模拟永远以 TICK_DT 为单位推进，与帧率、倍速无关；倍速 = 每秒多跑几个 tick。
 TICK_RATE = 60
 TICK_DT = 1.0 / TICK_RATE
+# 自动回血：受伤后 REGEN_DELAY 秒内没再受伤、且没有在流血，就每秒恢复 REGEN_RATE 点（睡觉 ×3，饥饿时减半/停止）
+REGEN_DELAY = 5.0
+REGEN_RATE = 0.5
 START_COLONISTS = 1        # 每位玩家开局的小人数量
 MAX_TICKS_PER_FRAME = 8   # 单帧最多补多少个 tick，防止卡顿后越补越卡

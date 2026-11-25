@@ -5,6 +5,7 @@ import random
 import math
 from settings import TILE_SIZE, WHITE, SELECT
 from core.pathfinding import astar
+from core.regen import regen_amount
 from world.buildings import BUILDING_DEFS
 from world.world import T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK
 from world.items import ITEM_DEFS
@@ -27,6 +28,7 @@ class Colonist:
         self.x, self.y = tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2
         self.name = name or f"小人{self.id}"
         self.hp, self.max_hp = 100, 100
+        self.since_hurt = 99.0          # 距离上次受伤过了多少秒（自动回血要等它超过 REGEN_DELAY）
         # 玩家全手动后，提升 50% 效率（含移动）
         self.base_speed, self.base_work_speed = 5.25 * TILE_SIZE, 45.0
         self.speed, self.work_speed = self.base_speed, self.base_work_speed
@@ -114,6 +116,7 @@ class Colonist:
 
     def take_damage(self, amount, attacker=None):
         self.hp -= amount
+        self.since_hurt = 0.0
         self.hit_flash = 0.15
         self.bleeding += amount * 0.05
         if self.state == "sleeping": self._wake_up()
@@ -156,6 +159,11 @@ class Colonist:
             if self.hp <= 0: return
 
         self.satiety, self.rest = max(0, min(100, self.satiety)), max(0, min(100, self.rest))
+
+        # 自动回血
+        self.since_hurt += dt
+        self.hp += regen_amount(self.hp, self.max_hp, self.bleeding, self.state == "sleeping",
+                                self.since_hurt, self.satiety, dt)
 
         mood_target = 100
         if self.satiety < 30: mood_target -= (30 - self.satiety) * 1.5

@@ -1,6 +1,6 @@
 # RimWorld-like 沙盒生存
 
-Python + pygame-ce 的 2D 俯视角殖民地沙盒游戏，支持局域网双人联机（锁步同步）。
+Python + pygame-ce 的 2D 俯视角殖民地沙盒游戏，支持局域网 2~4 人联机（锁步同步，每位玩家控制自己的小人）。
 
 ## 玩家：怎么玩
 
@@ -74,3 +74,10 @@ Linux `~/.local/share/SandboxGame/`（`crash.log`、`game.log`、`desync_report.
 | `python -m tools.net_test` | 真实 TCP 联机：卡顿、碎片化、分叉检测、掉线、非法数据 |
 | `python -m tools.menu_test` | 主菜单、局域网房间发现、创建/加入房间 |
 | `python -m tools.package_check` / `package_test` | 打包前自检 / 打包代码测试 |
+
+## 玩家资料与自动回血
+
+- 联机大厅左上角点自己的名字：设置用户名、上传头像（文件选择窗口，或拖图片进窗口）。资料保存在用户数据目录的 `profile.json`。
+- 资料只用于显示，不参与模拟与状态哈希；联机时随握手发给主机，主机清洗后把名单发给所有人。
+- 小人自动回血：规则在 `core/regen.py`，参数在 `settings.py`（REGEN_DELAY / REGEN_RATE）。
+- 测试：`python -m tools.profile_test`（回血、资料、名单、资料页流程）。

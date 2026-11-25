@@ -9,15 +9,27 @@
   主菜单 ─ 单人游戏 ───────────────────────────────→ 开始单机
          └ 多人游戏 → 联机大厅（房间列表，自动搜索）
                         ├ 点击某个房间 → 加入 → 开始联机
-                        └ 创建房间 → 输入房间名 → 等待玩家加入（持续广播）→ 开始联机
+                        └ 创建房间 → 输入房间名 → 房间大厅（持续广播，最多 4 人；房主点「开始游戏」）→ 开始联机
+                       加入房间后同样停在大厅，等房主开始
 """
 import os
 import socket
 import time
 
 from net.discovery import RoomBeacon, RoomFinder, DISC_PORT
-from net.session import LockstepSession, DEFAULT_PORT, PROTO, get_lan_ip
+from net.session import LockstepSession, DEFAULT_PORT, PROTO, MAX_PLAYERS, get_lan_ip
 from core.version import GAME_VERSION, DISPLAY_NAME
+from core.profile import Profile, sanitize_name, decode_avatar, PLAYER_COLORS, NAME_MAX as PNAME_MAX
+
+
+def _default_picker():
+    from ui.avatar import pick_avatar_file
+    return pick_avatar_file()
+
+
+def _default_loader(path):
+    from ui.avatar import load_avatar_file
+    return load_avatar_file(path)
 
 NAME_MAX = 20
 
@@ -58,6 +70,12 @@ class MenuModel:
         self.delay = cfg.get("delay", 4)
         self.seed = cfg.get("seed", 42)
         self.clock = clock
+        self.profile = cfg.get("profile") or Profile()              # 本机玩家资料（用户名 + 头像）
+        self.avatar_picker = cfg.get("avatar_picker") or _default_picker     # 可注入（测试用）
+        self.avatar_loader = cfg.get("avatar_loader") or _default_loader
+        self.edit_avatar = None                                      # 资料页里"尚未保存"的头像
+        self.profile_msg = ""
+        self._raw_cache = {}
         self.screen = "main"
         self.sel = 0
         self.result = None
@@ -70,6 +88,7 @@ class MenuModel:
         self.room_name = ""
         self.room_id = ""
         self._join_room = None
+        self._was_in_room = False
         self._entered_lobby = 0.0
         self._lobby_error = ""
         self._last_widgets = []
@@ -89,6 +108,10 @@ class MenuModel:
             self._open_finder()
         elif screen == "create":
             self.text = self.default_name
+        elif screen == "profile":
+            self.text = self.profile.name
+            self.edit_avatar = self.profile.avatar
+            self.profile_msg = ""
 
     def _open_finder(self):
         self._close_finder()
@@ -140,7 +163,7 @@ class MenuModel:
 
         if self.screen == "main":
             label(DISPLAY_NAME, h // 2 - 190, big=True)
-            label("殖民地建设 · 手动指挥 · 局域网双人联机", h // 2 - 130, color="dim")
+            label(f"殖民地建设 · 手动指挥 · 局域网多人联机（最多 {MAX_PLAYERS} 人）", h // 2 - 130, color="dim")
             button("单人游戏", h // 2 - 70, "single")
             button("多人游戏", h // 2 + 2, "multi")
             button("退出", h // 2 + 74, "quit")
@@ -167,6 +190,8 @@ class MenuModel:
                                  f"{r['ip']}   {r['players']}/{r['max']}   {tag}"))
             if len(rooms) > max_rows:
                 label(f"还有 {len(rooms) - max_rows} 个房间未显示", top + max_rows * row_h + 6, color="dim")
+            ws.append(Widget("avatar", 24, 16, 44, 44, "", None, True, (self.profile.avatar, self.profile.name, None)))
+            button(f"{self.profile.name}（点击修改资料）", 16, "profile", bw=330, bh=44, x=76)
             by = h - 90
             button("创建房间", by, "create", bw=200, x=cx - 330)
             button("刷新", by, "refresh", bw=200, x=cx - 100)
@@ -180,17 +205,45 @@ class MenuModel:
             button("取消", h // 2 + 30, "back_lobby", bw=250, x=cx + 15)
 
         elif self.screen == "hosting":
-            label(f"房间「{self.room_name}」已创建", h // 2 - 130, big=True)
-            label("正在等待其他玩家加入…", h // 2 - 70)
+            top = max(30, h // 2 - 290)
+            n = self.session.player_count() if self.session is not None else 1
+            label(f"房间「{self.room_name}」已创建", top, big=True)
+            label(f"房间里现在有 {n} / {MAX_PLAYERS} 人" + ("" if n > 1 else "，正在等待其他玩家加入…"), top + 52)
+            roster = self.session.lobby_roster() if self.session is not None else [self.profile.to_wire()]
+            y = self._roster_rows(ws, roster, cx - 210, top + 100, 420, me=0)
             if self.session is not None:
                 label(f"同一局域网的玩家会在房间列表里看到你；也可以直连  {get_lan_ip()}:{self.session.port}",
-                      h // 2 - 30, color="dim")
-            button("关闭房间", h // 2 + 30, "cancel_host")
+                      y + 6, color="dim")
+            button("开始游戏" if n > 1 else "开始游戏（至少需要 2 人）", y + 44, "start_host", bw=360, enabled=n > 1)
+            button("关闭房间", y + 112, "cancel_host")
 
         elif self.screen == "joining":
             name = self._join_room["name"] if self._join_room else ""
-            label(f"正在加入「{name}」…", h // 2 - 60, big=True)
-            button("取消", h // 2 + 10, "cancel_join")
+            if self.session is not None and self.session.state == "lobby":
+                top = max(30, h // 2 - 250)
+                label(f"已加入「{name}」", top, big=True)
+                label(f"房间里现在有 {self.session.lobby_n} / {MAX_PLAYERS} 人，等待房主开始游戏…", top + 52)
+                roster = self.session.lobby_roster()
+                y = self._roster_rows(ws, roster, cx - 210, top + 100, 420, me=self.session.lobby_me)
+                button("离开房间", y + 30, "cancel_join")
+            else:
+                label(f"正在加入「{name}」…", h // 2 - 60, big=True)
+                button("取消", h // 2 + 10, "cancel_join")
+
+        elif self.screen == "profile":
+            top = max(20, h // 2 - 250)
+            label("个人资料", top, big=True)
+            label(f"用户名（最多 {PNAME_MAX} 个字）：", top + 60, color="dim")
+            ws.append(Widget("input", cx - 200, top + 90, 400, 52, self.text, None, True, PNAME_MAX))
+            ws.append(Widget("avatar", cx - 48, top + 165, 96, 96, "", None, True,
+                             (self.edit_avatar, self.text or self.profile.name, None)))
+            button("选择头像…", top + 285, "pick_avatar", bw=240, x=cx - 260)
+            button("清除头像", top + 285, "clear_avatar", bw=240, x=cx + 20)
+            label("也可以把图片文件直接拖进这个窗口（png / jpg / bmp / gif）", top + 350, color="dim")
+            if self.profile_msg:
+                label(self.profile_msg, top + 380, color="bad")
+            button("保存", top + 425, "save_profile", bw=240, x=cx - 260)
+            button("取消", top + 425, "cancel_profile", bw=240, x=cx + 20)
 
         elif self.screen == "message":
             for i, line in enumerate(self.message):
@@ -202,6 +255,36 @@ class MenuModel:
         if sel:
             self.sel = min(self.sel, len(sel) - 1)
         return ws
+
+    def _raw(self, b64):
+        """名单里的 base64 头像 → 原始像素（带缓存，名单每帧都会重画）。"""
+        if not b64:
+            return None
+        if b64 not in self._raw_cache:
+            self._raw_cache[b64] = decode_avatar(b64)
+        return self._raw_cache[b64]
+
+    def _roster_rows(self, ws, roster, x, y, w, me=None):
+        for i, r in enumerate(roster):
+            ws.append(Widget("player", x, y + i * 50, w, 44, r["name"], None, True,
+                             (self._raw(r.get("av")), i, i == me), "房主" if i == 0 else ""))
+        return y + len(roster) * 50
+
+    def avatar_surface(self, raw, name, idx, size):
+        """菜单绘制用：头像图面（带缓存）。没有头像时画默认头像。只在有 pygame 窗口时调用。"""
+        from ui.avatar import make_avatar_surface
+        key = (bytes(raw) if raw else None, name[:1], idx, size)
+        cache = self.__dict__.setdefault("_surf_cache", {})
+        if key not in cache:
+            import pygame
+            font = pygame.font.Font(None, max(12, size))
+            try:
+                from ui.fonts import load_font
+                font = load_font(max(12, int(size * 0.6)))
+            except Exception:                                                    # noqa: BLE001
+                pass
+            cache[key] = make_avatar_surface(raw, name, PLAYER_COLORS[idx % len(PLAYER_COLORS)], font, size)
+        return cache[key]
 
     def _selectable(self):
         return [x for x in self._last_widgets if x.selectable]
@@ -230,17 +313,32 @@ class MenuModel:
         elif name == "enter":
             if self.screen == "create":
                 self.do("confirm_create")
+            elif self.screen == "profile":
+                self.do("save_profile")
             elif sel:
                 self.activate(sel[min(self.sel, len(sel) - 1)])
         elif name == "escape":
             self.do({"main": "quit", "lobby": "back", "create": "back_lobby", "hosting": "cancel_host",
-                     "joining": "cancel_join", "message": "ok"}.get(self.screen, "back"))
-        elif name == "backspace" and self.screen == "create":
+                     "joining": "cancel_join", "message": "ok", "profile": "cancel_profile"}.get(self.screen, "back"))
+        elif name == "backspace" and self.screen in ("create", "profile"):
             self.text = self.text[:-1]
 
     def text_input(self, s):
-        if self.screen == "create":
-            self.text = (self.text + "".join(ch for ch in s if ch.isprintable()))[:NAME_MAX]
+        if self.screen in ("create", "profile"):
+            limit = NAME_MAX if self.screen == "create" else PNAME_MAX
+            self.text = (self.text + "".join(ch for ch in s if ch.isprintable()))[:limit]
+
+    def drop_file(self, path):
+        """玩家把文件拖进窗口：在资料页里当作头像图片。"""
+        if self.screen == "profile":
+            self._load_avatar(path)
+
+    def _load_avatar(self, path):
+        try:
+            self.edit_avatar = self.avatar_loader(path)
+            self.profile_msg = ""
+        except ValueError as e:
+            self.profile_msg = str(e)
 
     def activate(self, wd):
         self.do(wd.action, wd.data)
@@ -263,6 +361,29 @@ class MenuModel:
             self.go("lobby")
         elif action == "confirm_create":
             self._create_room()
+        elif action == "profile":
+            self.go("profile")
+        elif action == "pick_avatar":
+            try:
+                path = self.avatar_picker()
+            except RuntimeError:
+                self.profile_msg = "打不开文件选择窗口，请把图片文件直接拖进这个窗口"
+            else:
+                if path:
+                    self._load_avatar(path)
+        elif action == "clear_avatar":
+            self.edit_avatar = None
+            self.profile_msg = ""
+        elif action == "save_profile":
+            self.profile.name = sanitize_name(self.text, self.profile.name)
+            self.profile.avatar = self.edit_avatar
+            self.profile.save()
+            self.go("lobby")
+        elif action == "cancel_profile":
+            self.go("lobby")
+        elif action == "start_host":
+            if self.session is not None:
+                self.session.start_game()
         elif action == "cancel_host":
             self._close_hosting()
             self.go("lobby")
@@ -270,6 +391,7 @@ class MenuModel:
             room = next((r for r in self.rooms() if r["id"] == data), None)
             if room is not None:
                 self._join_room = room
+                self._was_in_room = False
                 self.go("joining")
         elif action == "cancel_join":
             self._close_hosting()
@@ -282,15 +404,18 @@ class MenuModel:
         name = self.text.strip() or self.default_name
         try:
             try:
-                self.session = LockstepSession.host(port=self.game_port, seed=self.seed, delay=self.delay)
+                self.session = LockstepSession.host(port=self.game_port, seed=self.seed, delay=self.delay, expect=None,
+                                                   profile=self.profile.to_wire())
             except OSError:                                           # 默认端口被占用：换一个空闲端口
-                self.session = LockstepSession.host(port=0, seed=self.seed, delay=self.delay)
+                self.session = LockstepSession.host(port=0, seed=self.seed, delay=self.delay, expect=None,
+                                                   profile=self.profile.to_wire())
         except OSError as e:
             self.show_message(["创建房间失败", str(e)], back="lobby")
             return
         self.room_name = name
         self.room_id = os.urandom(4).hex()
-        self.beacon = RoomBeacon(self.room_id, name, self.session.port, port=self.disc_port, targets=self.targets)
+        self.beacon = RoomBeacon(self.room_id, name, self.session.port, max_players=MAX_PLAYERS,
+                                 port=self.disc_port, targets=self.targets)
         self.go("hosting")
 
     # ---------------- 每帧更新 ----------------
@@ -299,22 +424,29 @@ class MenuModel:
         if self.screen == "lobby" and self.finder is not None:
             self.finder.update(now)
         elif self.screen == "hosting":
-            self.beacon.update(now)
             self.session.pump()
+            self.beacon.info["players"] = self.session.player_count()      # 房间列表里实时显示人数
+            self.beacon.update(now)
             if self.session.state == "ready":
                 self.beacon.close(); self.beacon = None
                 self.result = {"mode": "host", "session": self.session}
             elif self.session.state in ("failed", "disconnected"):
-                self.show_message(["房间出错了", "与玩家的连接中断了，请重新创建房间"], back="lobby")
+                self.show_message(["房间出错了", "网络出现问题，请重新创建房间"], back="lobby")
         elif self.screen == "joining":
             if self.session is None:
                 room = self._join_room
-                self.session = LockstepSession.join(room["ip"], room["port"], timeout=3.0)   # 局域网内很快；这一步会短暂阻塞
+                self.session = LockstepSession.join(room["ip"], room["port"], timeout=3.0,
+                                              profile=self.profile.to_wire())   # 局域网内很快；这一步会短暂阻塞
             self.session.pump()
+            if self.session.state == "lobby":
+                self._was_in_room = True
             if self.session.state == "ready":
                 self.result = {"mode": "join", "session": self.session}
             elif self.session.state in ("failed", "disconnected"):
-                self.show_message(["加入房间失败", friendly_join_error(self.session.error)], back="lobby")
+                if self._was_in_room:
+                    self.show_message(["房间已关闭", "房主离开了房间，请重新加入或自己创建"], back="lobby")
+                else:
+                    self.show_message(["加入房间失败", friendly_join_error(self.session.error)], back="lobby")
 
 
 # =====================================================================
@@ -358,6 +490,23 @@ def draw_menu(screen, fonts, model):
             screen.blit(n, (wd.x + 14, wd.y + (wd.h - n.get_height()) // 2))
             r = font.render(wd.right, True, (200, 210, 160) if wd.enabled else (120, 120, 125))
             screen.blit(r, (wd.x + wd.w - r.get_width() - 14, wd.y + (wd.h - r.get_height()) // 2))
+        elif wd.kind == "avatar":
+            raw, nm, _ = wd.data
+            surf = model.avatar_surface(raw, nm, 0, wd.w)
+            screen.blit(surf, (wd.x, wd.y))
+            pygame.draw.rect(screen, (140, 170, 220), (wd.x, wd.y, wd.w, wd.h), 2)
+        elif wd.kind == "player":
+            raw, idx, is_me = wd.data
+            col = PLAYER_COLORS[idx % len(PLAYER_COLORS)]
+            pygame.draw.rect(screen, (38, 42, 54), (wd.x, wd.y, wd.w, wd.h), border_radius=6)
+            pygame.draw.rect(screen, col, (wd.x, wd.y, wd.w, wd.h), 2, border_radius=6)
+            size = wd.h - 8
+            screen.blit(model.avatar_surface(raw, wd.text, idx, size), (wd.x + 4, wd.y + 4))
+            n = big.render(wd.text + ("（我）" if is_me else ""), True, (255, 255, 255))
+            screen.blit(n, (wd.x + size + 16, wd.y + (wd.h - n.get_height()) // 2))
+            if wd.right:
+                r = font.render(wd.right, True, (200, 210, 160))
+                screen.blit(r, (wd.x + wd.w - r.get_width() - 12, wd.y + (wd.h - r.get_height()) // 2))
         elif wd.kind == "input":
             pygame.draw.rect(screen, (30, 33, 42), (wd.x, wd.y, wd.w, wd.h), border_radius=6)
             pygame.draw.rect(screen, (140, 170, 220), (wd.x, wd.y, wd.w, wd.h), 2, border_radius=6)
@@ -367,8 +516,8 @@ def draw_menu(screen, fonts, model):
     ver = font.render(f"v{GAME_VERSION}", True, (90, 95, 105))
     screen.blit(ver, (w - ver.get_width() - 12, h - 28))
     foot = {"main": "↑↓ 选择   Enter 确认   Esc 退出", "lobby": "点击房间加入   Esc 返回",
-            "create": "输入名字后按 Enter 创建   Esc 取消", "hosting": "Esc 关闭房间",
-            "joining": "Esc 取消", "message": "Enter 确定"}.get(model.screen, "")
+            "create": "输入名字后按 Enter 创建   Esc 取消", "hosting": "人齐后点「开始游戏」   Esc 关闭房间", "profile": "输入用户名后按 Enter 保存   Esc 取消",
+            "joining": "Esc 离开", "message": "Enter 确定"}.get(model.screen, "")
     if foot:
         surf = font.render(foot, True, (110, 115, 125))
         screen.blit(surf, (w // 2 - surf.get_width() // 2, h - 28))
@@ -400,6 +549,8 @@ def run_menu(screen, fonts, clock, cfg=None):
                     model.key(keymap[event.key])
                 elif event.type == pygame.TEXTINPUT:
                     model.text_input(event.text)
+                elif event.type == pygame.DROPFILE:
+                    model.drop_file(event.file)
             model.update()
             draw_menu(screen, fonts, model)
             pygame.display.flip()

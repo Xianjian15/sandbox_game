@@ -2,6 +2,7 @@
 import random
 import pygame
 
+from core.profile import PLAYER_COLORS
 from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT, START_COLONISTS
 from core.camera import Camera
 from core.time_system import GameTime
@@ -82,6 +83,8 @@ class GameWorld:
         # 暂停时世界不更新，但回合照走，这样"取消暂停"这条指令才能在联机时生效。
         self.turn = 0
         self.net_status = ""      # 联机状态文字（由 net.session 写入，只用于显示）
+        self.player_profiles = []   # 玩家资料（用户名+头像图面），只用于显示，不参与模拟/哈希
+        self.gone_players = set()   # 已离开的玩家编号（由 net.session 写入，只用于显示）
         self.cmd_seq = 0
         self.cmd_buffer = {}      # tick -> [cmd]
         self.cmd_outbox = []      # 本地新发出、待网络层发送的指令（仅 cmd_delay > 0 时记录）
@@ -197,16 +200,64 @@ class GameWorld:
             self.cmd_log.append((self.turn, dict(cmd)))
         apply_command(self, cmd)
 
-    OWNER_COLORS = ((90, 160, 255), (255, 150, 60), (120, 220, 120), (220, 100, 220))
+    OWNER_COLORS = PLAYER_COLORS
+
+    def set_profiles(self, roster):
+        """联机开局后由 main 调用：roster = [{"name","av"(base64 或 None)}]，按玩家编号排列。"""
+        from core.profile import decode_avatar
+        from ui.avatar import make_avatar_surface
+        self.player_profiles = []
+        for i, r in enumerate(roster or []):
+            col = self.OWNER_COLORS[i % len(self.OWNER_COLORS)]
+            raw = decode_avatar(r.get("av"))
+            name = r.get("name") or f"玩家{i + 1}"
+            self.player_profiles.append({
+                "name": name, "color": col,
+                "big": make_avatar_surface(raw, name, col, self.font_big, 32),
+                "small": make_avatar_surface(raw, name, col, self.font, 16)})
+
+    def player_name(self, i):
+        if 0 <= i < len(self.player_profiles):
+            return self.player_profiles[i]["name"]
+        return f"P{i + 1}"
+
+    def _draw_player_bar(self, surface):
+        """界面上方（时间信息行下面）列出所有玩家的头像和用户名；自己标"我"，已离开的变灰。"""
+        x, y = 10, 40
+        for i, pr in enumerate(self.player_profiles):
+            gone = i in self.gone_players
+            label = pr["name"] + (" (我)" if i == self.local_player else "") + (" (已离开)" if gone else "")
+            txt = self.font.render(label, True, (150, 150, 150) if gone else (255, 255, 255))
+            w = 32 + 10 + txt.get_width() + 12
+            panel = pygame.Surface((w, 38), pygame.SRCALPHA)
+            panel.fill((20, 20, 28, 170))
+            surface.blit(panel, (x, y))
+            av = pr["big"]
+            if gone:
+                av = av.copy(); av.set_alpha(100)
+            surface.blit(av, (x + 3, y + 3))
+            pygame.draw.rect(surface, pr["color"] if not gone else (90, 90, 90), (x + 2, y + 2, 34, 34), 2)
+            surface.blit(txt, (x + 42, y + 19 - txt.get_height() // 2))
+            x += w + 8
 
     def _draw_owner_mark(self, surface, c):
-        """联机时在小人脚下画归属色环，自己的小人另加"我"标记，一眼分清谁是谁的。"""
+        """联机时在小人脚下画归属色环，头顶标出操控它的玩家用户名（和头像）。"""
         sx, sy = self.camera.world_to_screen(c.x, c.y)
         col = self.OWNER_COLORS[c.owner_id % len(self.OWNER_COLORS)]
         pygame.draw.circle(surface, col, (int(sx), int(sy)), c.radius + 3, 2)
-        tag = f"P{c.owner_id + 1}" + (" 我" if c.owner_id == self.local_player else "")
-        img = self.font_small.render(tag, True, col)
-        surface.blit(img, (int(sx - img.get_width() / 2), int(sy + c.radius + 4)))
+        name = self.player_name(c.owner_id)
+        txt = self.font.render(name, True, col)
+        small = self.player_profiles[c.owner_id]["small"] if c.owner_id < len(self.player_profiles) else None
+        w = txt.get_width() + (20 if small else 0)
+        x0 = int(sx - w / 2)
+        y0 = int(sy - c.radius - 30)
+        bg = pygame.Surface((w + 6, 18), pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 120))
+        surface.blit(bg, (x0 - 3, y0 - 1))
+        if small:
+            surface.blit(small, (x0, y0 + 1))
+            x0 += 20
+        surface.blit(txt, (x0, y0))
 
     def selected_colonists(self):
         return [c for c in self.colonists if c.selected and c.owner_id == self.local_player]
@@ -900,6 +951,8 @@ class GameWorld:
         info = (f"{self.game_time.time_str()} | 速度 {speed_text} | 殖民者 {len(self.colonists)} | "
                 f"敌人 {len(self.enemies)} | 动物 {len(self.animals)}")
         surface.blit(self.font_big.render(info, True, WHITE), (10, 10))
+        if self.player_profiles:
+            self._draw_player_bar(surface)
         if self.net_status:
             ns = self.font.render(self.net_status, True, (255, 220, 120))
             surface.blit(ns, (surface.get_width() - ns.get_width() - 12, 12))

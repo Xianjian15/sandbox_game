@@ -4,10 +4,11 @@
   1 菜单导航          键盘/鼠标走通 主菜单 / 大厅 / 创建页，单人、退出、返回
   2 房间名输入        默认名、退格、长度上限、不可见字符、空名回落到默认名
   3 房间发现          房主广播 → 玩家列表出现 → 房主关房后列表按 TTL 消失；乱包被忽略；多房间排序
-  4 完整流程          两个菜单：一个创建房间，另一个点击房间加入，不输入任何 IP；然后真的联机对拍
-  5 满员/抢房         两人同时抢一个房间：只有一个进去，另一个得到失败提示；房主不受影响
+  4 完整流程          两个菜单：一个创建房间，另一个点击房间加入（不输入任何 IP），停在大厅，房主点"开始游戏"，然后联机对拍
+  5 多人同房          三位玩家加入同一房间：大厅人数实时同步、房间列表里的人数更新；房主点开始后全部就绪；第 4 人之后满员
+  5b 开局后迟到       房主开始后，列表里还留着旧房间的玩家去点：得到失败提示而不是卡死；房主关房时大厅里的玩家得到"房间已关闭"
   6 捣乱连接          有人连上房间却不说话/发乱码：房间不死，之后真正的玩家仍能加入
-  7 版本不符          协议版本不同的房间显示为不可加入
+  7 版本不符/已满     协议版本不同或满 4 人的房间显示为不可加入
   8 资源释放          取消房间后端口/广播都被释放
 用法： python -m tools.menu_test
 """
@@ -26,6 +27,7 @@ from net import session as netsession                           # noqa: E402
 from net.discovery import RoomBeacon, RoomFinder                # noqa: E402
 from net.session import LockstepSession                         # noqa: E402
 from ui.menu import MenuModel                                   # noqa: E402
+from tools import multi_test as mt                              # noqa: E402
 
 W, H = 1280, 720
 # 回环网段的广播地址：和真实局域网广播一样，会同时送达所有监听同一端口的程序
@@ -86,7 +88,7 @@ def sc_navigation():
     m.key("enter")                                     # 选中"多人游戏"
     ok &= m.screen == "lobby"
     lobby_btns = [w.text for w in m.layout(W, H) if w.kind == "button"]
-    ok &= lobby_btns == ["创建房间", "刷新", "返回"]
+    ok &= lobby_btns[1:] == ["创建房间", "刷新", "返回"] and "修改资料" in lobby_btns[0]      # 第一个是左上角的资料按钮
     m.key("escape"); ok &= m.screen == "main"
     click(m, "multi"); ok &= m.screen == "lobby"
     click(m, "back"); ok &= m.screen == "main"
@@ -145,7 +147,7 @@ def sc_discovery():
     return ok, f"发现={names}；乙关房后剩={left}；全关后为空={f.room_list() == []}"
 
 
-def make_pair(clock, disc_port):
+def make_pair(clock, disc_port):   # 房主建好房间 + 一位还没加入的玩家看到了房间列表
     host = MenuModel(cfg(disc_port), clock=clock)
     client = MenuModel(cfg(disc_port), clock=clock)
     click(host, "multi"); click(host, "create"); host.key("enter")
@@ -155,61 +157,89 @@ def make_pair(clock, disc_port):
     return host, client
 
 
+def start_and_wait(host, others, clock, limit=400):
+    """房主点"开始游戏"，等所有人的菜单都产出结果。"""
+    click(host, "start_host")
+    return run_until([host] + others, clock, lambda: host.result and all(o.result for o in others), limit=limit)
+
+
+def play_check(models, turns=1500):
+    """用菜单交出来的 session 真联机跑一段（假世界），返回是否一致。"""
+    peers = []
+    for m in models:
+        s = m.result["session"]
+        g = mt.FakeGame(); s.attach(g); peers.append((s, g))
+    mt.run(peers, turns)
+    same = len({g.state_hash() for _, g in peers}) == 1 and all(g.turn == turns for _, g in peers)
+    states = [s.state for s, _ in peers]
+    mt.close_all(peers)
+    return same and all(st == "running" for st in states), states
+
+
 def sc_full_flow():
-    from tools import net_test as nt
     disc = free_udp_port(); clock = Clock()
     host, client = make_pair(clock, disc)
     room = client.rooms()[0]
     row = widget(client, "join", room["id"])
     shown = (row.text, row.right) if row else None
     click(client, "join", room["id"])                                   # 玩家点击房间，没有输入任何 IP
-    done = run_until([host, client], clock, lambda: host.result and client.result)
-    ok = done and host.result["mode"] == "host" and client.result["mode"] == "join"
+    in_lobby = run_until([host, client], clock, lambda: client.session is not None and client.session.state == "lobby"
+                         and host.session.lobby_count() == 1)
+    wait_text = [w.text for w in client.layout(W, H) if w.kind == "label"]
+    start_disabled_before = True
+    ok = in_lobby and host.result is None and client.result is None      # 没点开始之前：双方都停在大厅
+    ok &= any("等待房主" in t for t in wait_text)
+    done = start_and_wait(host, [client], clock)
+    ok &= bool(done) and host.result["mode"] == "host" and client.result["mode"] == "join"
     hs, cs = host.result["session"], client.result["session"]
     ok &= hs.state == "ready" and cs.state == "ready" and hs.cfg["seed"] == cs.cfg["seed"] == 42
-    ok &= (hs.cfg["player"], cs.cfg["player"]) == (0, 1)
+    ok &= (hs.cfg["player"], cs.cfg["player"]) == (0, 1) and hs.cfg["players"] == cs.cfg["players"] == 2
     host.close(); client.close()
-    # 真的联机对拍 1500 回合
-    peers = nt.build_game([hs, cs])
-    ran = nt.run_game(peers, turns=1500)
-    same = nt.final_equal(peers)
-    info = f"列表项={shown}；双方 session 就绪={ok}；联机 1500 回合哈希一致={same}；状态=({hs.state},{cs.state})"
-    nt.close_all(hs, cs)
-    return ok and ran and same and (hs.state, cs.state) == ("running", "running"), info
+    good, states = play_check([host, client])
+    info = f"列表项={shown}；加入后停在大厅={in_lobby}；开始后双方就绪={ok}；联机 1500 回合一致={good}；状态={states}"
+    return ok and good, info
 
 
-def sc_race():
+def sc_multi():
     disc = free_udp_port(); clock = Clock()
     host, c1 = make_pair(clock, disc)
-    c2 = MenuModel(cfg(disc), clock=clock); click(c2, "multi")
-    assert run_until([host, c1, c2], clock, lambda: len(c2.rooms()) == 1)
+    cs = [c1] + [MenuModel(cfg(disc), clock=clock) for _ in range(2)]
+    for m in cs[1:]: click(m, "multi")
+    assert run_until([host] + cs, clock, lambda: all(len(m.rooms()) == 1 for m in cs))
+    start0 = widget(host, "start_host")
+    ok = start0 is None                                                   # 只有房主一人：开始按钮不可用
     rid = c1.rooms()[0]["id"]
-    click(c1, "join", rid); click(c2, "join", rid)                      # 同时点击同一个房间
-    run_until([host, c1, c2], clock, lambda: host.result and (c1.result or c1.screen == "message") and (c2.result or c2.screen == "message"), limit=400)
-    winners = [m for m in (c1, c2) if m.result]
-    losers = [m for m in (c1, c2) if m.screen == "message"]
-    ok = host.result is not None and len(winners) == 1 and len(losers) == 1
-    msg = losers[0].message if losers else None
-    ok &= bool(msg) and msg[0] == "加入房间失败" and "Errno" not in " ".join(msg)
-    # 失败的玩家点"确定"回到大厅
-    if losers:
-        click(losers[0], "ok"); ok &= losers[0].screen == "lobby"
-    info = f"房主就绪={host.result is not None}；成功 {len(winners)} 人，失败 {len(losers)} 人；失败提示={msg}"
-    for m in (host, c1, c2): m.close()
-    for m in winners + [host]:
-        if m.result and "session" in m.result: m.result["session"].close()
-    return ok, info
+    for m in cs: click(m, "join", rid)
+    run_until([host] + cs, clock, lambda: host.session.lobby_count() == 3
+              and all(m.session is not None and m.session.lobby_n == 4 for m in cs))
+    counts = [host.session.player_count()] + [m.session.lobby_n for m in cs]
+    ok &= counts == [4, 4, 4, 4]
+    # 房间列表里（第 5 个玩家看到的）显示 4/4 已满且不可加入
+    viewer = MenuModel(cfg(disc), clock=clock); click(viewer, "multi")
+    run_until([host, viewer] + cs, clock, lambda: any(r["players"] == 4 for r in viewer.rooms()))
+    row = next((w for w in viewer.layout(W, H) if w.kind == "row"), None)
+    ok &= row is not None and (not row.enabled) and "4/4" in row.right and "已满" in row.right
+    ok &= widget(host, "start_host") is not None
+    done = start_and_wait(host, cs, clock)
+    ok &= bool(done)
+    sess = [host.result["session"]] + [m.result["session"] for m in cs]
+    ok &= sorted(s.cfg["player"] for s in sess) == [0, 1, 2, 3] and all(s.cfg["players"] == 4 for s in sess)
+    host.close(); [m.close() for m in cs]; viewer.close()
+    good, states = play_check([host] + cs, turns=1200)
+    return ok and good, f"大厅人数={counts}；满员行={row.right if row else None}；开局编号={sorted(s.cfg['player'] for s in sess)}；四人联机一致={good} {states}"
 
 
 def sc_late_join():
-    """房主已满员后，另一个还留着旧房间列表的玩家去点那个房间：必须得到失败提示，而不是卡死。"""
+    """房主开始后，另一个还留着旧房间列表的玩家去点那个房间：必须得到失败提示，而不是卡死。
+    另外：房主在大厅里关房，已加入的玩家得到"房间已关闭"。"""
     disc = free_udp_port(); clock = Clock()
     host, c1 = make_pair(clock, disc)
     late = MenuModel(cfg(disc), clock=clock); click(late, "multi")
     assert run_until([host, c1, late], clock, lambda: len(late.rooms()) == 1)
     rid = c1.rooms()[0]["id"]
     click(c1, "join", rid)
-    run_until([host, c1, late], clock, lambda: host.result and c1.result)
+    run_until([host, c1, late], clock, lambda: host.session.lobby_count() == 1)
+    start_and_wait(host, [c1], clock)
     click(late, "join", rid)                                            # late 的列表里房间还在（TTL 没到）
     run_until([late], clock, lambda: late.screen == "message", limit=200)
     ok = late.screen == "message" and late.message[0] == "加入房间失败" and "Errno" not in " ".join(late.message)
@@ -217,6 +247,16 @@ def sc_late_join():
     for m in (host, c1, late): m.close()
     for m in (host, c1):
         if m.result and "session" in m.result: m.result["session"].close()
+    # —— 房主在大厅里关房 ——
+    disc2 = free_udp_port(); clock2 = Clock()
+    h2, p2 = make_pair(clock2, disc2)
+    click(p2, "join", p2.rooms()[0]["id"])
+    run_until([h2, p2], clock2, lambda: h2.session.lobby_count() == 1)
+    click(h2, "cancel_host")
+    run_until([h2, p2], clock2, lambda: p2.screen == "message", limit=200)
+    ok &= p2.screen == "message" and p2.message[0] == "房间已关闭"
+    info += f"；房主关房后大厅玩家得到={p2.message}"
+    h2.close(); p2.close()
     return ok, info
 
 
@@ -233,16 +273,19 @@ def sc_stray():
         s1 = host.session.state
         garbage = socket.create_connection(("127.0.0.1", port))
         garbage.sendall(b"GET / HTTP/1.1\r\n\r\n")                      # 发 HTTP 乱码
-        run_until([host], clock, lambda: host.session.state == "waiting" and host.session.sock is None, limit=50)
+        run_until([host], clock, lambda: False, limit=15)
         s2 = host.session.state
         bad_len = socket.create_connection(("127.0.0.1", port))
         bad_len.sendall(b"\xff\xff\xff\xff")                            # 超大长度
-        run_until([host], clock, lambda: host.session.sock is None, limit=50)
+        run_until([host], clock, lambda: False, limit=15)
         s3 = host.session.state
+        n_in = host.session.lobby_count()
         click(client, "join", client.rooms()[0]["id"])
-        done = run_until([host, client], clock, lambda: host.result and client.result, limit=400)
-        ok = done and s1 in ("waiting", "handshake") and s2 == "waiting" and s3 == "waiting"
-        info = f"不说话/乱码/超大长度之后房主状态=({s1},{s2},{s3})，真玩家随后加入成功={bool(done)}"
+        run_until([host, client], clock, lambda: host.session.lobby_count() == 1 and client.session is not None
+                  and client.session.state == "lobby", limit=400)
+        done = start_and_wait(host, [client], clock)
+        ok = bool(done) and s1 == s2 == s3 == "waiting" and n_in == 0
+        info = f"不说话/乱码/超大长度之后房主状态=({s1},{s2},{s3}) 大厅人数={n_in}，真玩家随后加入并开局={bool(done)}"
         for x in (silent, garbage, bad_len): x.close()
         host.close(); client.close()
         for m in (host, client):
@@ -257,7 +300,7 @@ def sc_proto():
     m = MenuModel(cfg(disc), clock=clock); click(m, "multi")
     old = RoomBeacon("old1", "老版本房间", 5555, port=disc, targets=[BCAST])
     old.info["proto"] = 999
-    full = RoomBeacon("full", "满员房间", 5556, players=2, port=disc, targets=[BCAST])
+    full = RoomBeacon("full", "满员房间", 5556, players=4, port=disc, targets=[BCAST])
     assert run_until([m], clock, lambda: (old.update(clock()), full.update(clock()), len(m.rooms()) == 2)[2])
     rows = {w.text: w for w in m.layout(W, H) if w.kind == "row"}
     ok = (not rows["老版本房间"].enabled) and "版本不符" in rows["老版本房间"].right
@@ -297,9 +340,9 @@ def sc_release():
 def main():
     pygame.init(); pygame.font.init()
     plan = [("1 菜单导航", sc_navigation), ("2 房间名输入", sc_text), ("3 房间发现(UDP)", sc_discovery),
-            ("4 完整流程：创建→发现→点击加入→联机对拍", sc_full_flow), ("5 两人抢同一个房间", sc_race),
-            ("5b 满员后迟到的玩家", sc_late_join), ("6 捣乱连接不影响房间", sc_stray),
-            ("7 版本不符/已满的房间", sc_proto), ("8 取消房间释放资源", sc_release)]
+            ("4 完整流程：创建→发现→加入大厅→房主开始→联机对拍", sc_full_flow), ("5 四人同房：大厅/满员/开局/联机", sc_multi),
+            ("5b 开局后迟到 + 房主关房", sc_late_join), ("6 捣乱连接不影响房间", sc_stray),
+            ("7 版本不符/已满(4人)的房间", sc_proto), ("8 取消房间释放资源", sc_release)]
     allok = True
     for name, fn in plan:
         t0 = time.time()
