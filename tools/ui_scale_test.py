@@ -6,7 +6,7 @@
   U1 缩放计算      各种窗口尺寸的比例/逻辑尺寸；偏好档位；偏好存取（含坏文件）
   U2 1280×720      比例 1.0：界面直接画在屏幕上（不分配画布、不缩放），点击和以前完全一样
   U3 1920×1080     比例 1.5：界面画在 1280×720 逻辑画布上并整体缩放到窗口；点工具栏按钮（按窗口坐标）能正确切换模式
-  U4 地图点击      缩放后点地图仍按真实窗口坐标选中小人；点在左上角状态面板上被界面吞掉，不会穿透去取消选择
+  U4 地图点击      缩放后点地图仍按真实窗口坐标选中小人；点在左下角小人面板上被界面吞掉，不会穿透去取消选择
   U5 底部界面      框选模式下点底部工具栏不会开始框地图，点地图才会
   U6 右侧面板      窗口变宽后，右侧建筑面板贴着逻辑画面右边（而不是窗口右边）
   U7 小窗口        800×600：比例缩小，界面整体缩小并仍可点击
@@ -62,6 +62,7 @@ def check(name, cond, extra=""):
 def mk(w=1280, h=720):
     f = pygame.font.Font(None, 16)
     g = GameWorld(f, f, f, f, 1280, 720, seed=42)
+    g.ui_pref = max(1.0, w / 1280)    # 旧测试按"窗口越大界面越大"设计：用偏好复现同样的比例（默认行为见 U1）
     g.set_screen_size(w, h)
     return g
 
@@ -96,25 +97,30 @@ def button_center(g, key):
 
 def u1():
     print("== U1 缩放计算 ==")
-    cases = {(1280, 720): (1.0, (1280, 720)), (1920, 1080): (1.5, (1280, 720)), (2560, 1440): (2.0, (1280, 720)),
-             (3840, 2160): (3.0, (1280, 720)), (2560, 1080): (1.5, (1707, 720)), (800, 600): (0.6, (1334, 1000))}
+    # 默认偏好 0.85；窗口变大界面不放大，窗口小于 1280×720 才缩小
+    cases = {(1280, 720): (0.85, (1506, 848)), (1920, 1080): (0.85, (2259, 1271)), (3840, 2160): (0.85, (4518, 2542))}
     bad = {k: (U.compute_scale(*k), U.logical_size(*k, U.compute_scale(*k))) for k, v in cases.items()
            if (U.compute_scale(*k), U.logical_size(*k, U.compute_scale(*k))) != v}
-    check("常见分辨率的比例与逻辑尺寸", not bad, bad)
+    check("默认：窗口变大时界面大小不变（按钮不放大）", not bad, bad)
+    check("窗口比设计尺寸小：界面按比例缩小（带下限）", U.compute_scale(800, 600) < U.compute_scale(1280, 720)
+          and U.compute_scale(300, 200) >= U.MIN_SCALE)
+    check("偏好 1.0 + 大窗口：比例仍为 1.0", U.compute_scale(2560, 1440, 1.0) == 1.0)
     ok = all(abs(U.logical_size(w, h, U.compute_scale(w, h))[0] * U.compute_scale(w, h) - w) < 1 / 0.6 + 1
              for w, h in [(1366, 768), (1600, 900), (1000, 700), (2000, 900)])
     check("逻辑尺寸×比例 覆盖整个窗口（不留黑边）", ok)
     check("逻辑坐标换算", U.to_logical((1919, 1079), 1.5) == (1279, 719) and U.to_logical((10, 10), 1.0) == (10, 10))
-    check("偏好档位：放大/缩小/复位/夹住", U.step_pref(1.0, 1) == 1.125 and U.step_pref(1.0, -1) == 0.875
-          and U.step_pref(2.0, 1) == 2.0 and U.step_pref(0.75, -1) == 0.75 and U.step_pref(1.5, 0) == 1.0)
-    check("偏好影响比例", U.compute_scale(1280, 720, 1.5) == 1.5 and U.compute_scale(1920, 1080, 0.75) == 1.1)
+    check("偏好档位：放大/缩小/复位/夹住", U.step_pref(1.0, 1) == 1.125 and U.step_pref(1.0, -1) == 0.85
+          and U.step_pref(2.0, 1) == 2.0 and U.step_pref(0.6, -1) == 0.6 and U.step_pref(1.5, 0) == U.DEFAULT_PREF)
+    check("偏好影响比例", U.compute_scale(1280, 720, 1.5) == 1.5 and U.compute_scale(1920, 1080, 0.75) == 0.75)
     d = tempfile.mkdtemp()
     path = os.path.join(d, "x", "ui.json")
     check("偏好存取", U.save_pref(path, 1.25) and U.load_pref(path) == 1.25)
     open(path, "w").write("{坏")
-    check("坏文件/缺文件回落默认", U.load_pref(path) == 1.0 and U.load_pref(os.path.join(d, "none.json")) == 1.0)
-    open(path, "w").write('{"ui_pref": 99}')
-    check("越界偏好回落默认", U.load_pref(path) == 1.0)
+    check("坏文件/缺文件回落默认", U.load_pref(path) == U.DEFAULT_PREF and U.load_pref(os.path.join(d, "none.json")) == U.DEFAULT_PREF)
+    open(path, "w").write('{"%s": 99}' % U.PREF_KEY)
+    check("越界偏好回落默认", U.load_pref(path) == U.DEFAULT_PREF)
+    open(path, "w").write('{"ui_pref": 1.0}')
+    check("旧版偏好键作废（旧默认偏大）", U.load_pref(path) == U.DEFAULT_PREF)
 
 
 def u2():
@@ -162,7 +168,8 @@ def u4():
     click(g, (int(sx), int(sy)), W, H)
     check("按真实窗口坐标点小人：选中", c.selected)
     frame(g, W, H)
-    p = (200, 350)                 # 窗口坐标；换成逻辑坐标 (133,233) 落在状态面板(10,60,320,190)里
+    r = g.hud.panel_rect           # 小人面板在左下角（工具栏上方）：取面板中心换成窗口坐标
+    p = (int(r.centerx * g.ui_scale), int(r.centery * g.ui_scale))
     check("is_mouse_in_ui 用窗口坐标：落在状态面板上", g.is_mouse_in_ui(p) is True)
     check("面板外不算", g.is_mouse_in_ui((1500, 500)) is False)
     click(g, p, W, H)
@@ -197,11 +204,19 @@ def u5():
 def u6():
     print("== U6 右侧面板 ==")
     g = mk(2560, 1080)
+    g.ui_pref = 1.5
+    g.set_screen_size(2560, 1080)
     check("逻辑宽度 1707", g.ui_w == 1707, g.ui_w)
-    check("建筑面板贴着逻辑画面右边", g.bhud.panel_rect.x == g.ui_w - g.bhud.panel_w - 20, (g.bhud.panel_rect.x, g.ui_w))
+    from world.buildings import Building
+    _B = Building("workbench", "wood", 3, 3)
+    _C = Building("small_cabinet", "wood", 6, 3)
+    surf = pygame.Surface((g.ui_w, g.ui_h))
+    g.bhud.draw(surf, _C, {}, g.research_mgr)
+    check("柜子面板贴着逻辑画面右边", g.bhud.panel_rect.x == g.ui_w - g.bhud.panel_w - 20, (g.bhud.panel_rect.x, g.ui_w))
+    g.bhud.draw(surf, _B, {}, g.research_mgr)
+    x0 = g.bhud.panel_rect.x
     g.set_screen_size(1280, 720)
-    check("回到 1280×720 后面板回到原位", g.bhud.panel_rect.x == 1280 - g.bhud.panel_w - 20)
-
+    check("窗口大小变化不会移动制作面板的点击区域", g.bhud.panel_rect.x == x0 == 10, (x0, g.bhud.panel_rect.x))
 
 def u7():
     print("== U7 小窗口 ==")
@@ -228,7 +243,7 @@ def u8():
     check("最大档位夹住（2.0）", g.ui_pref == 2.0)
     g.set_ui_pref(1.0)
     frame(g, 1280, 720)
-    check("复位后恢复直接绘制", g.ui_scale == 1.0 and not CALLS)
+    check("偏好 100% 时恢复直接绘制", g.ui_scale == 1.0 and not CALLS)
 
 
 def u9():
@@ -249,7 +264,7 @@ def u9():
     prefs = []
     try:
         clock = type("C", (), {"tick": lambda self, fps=0: 16})()
-        res = M.run_menu(screen, fonts, clock, {"on_ui_pref": lambda d: prefs.append(d) or 1.0})
+        res = M.run_menu(screen, fonts, clock, {"ui_pref": 1.5, "on_ui_pref": lambda d: prefs.append(d) or 1.5})
     finally:
         pygame.event.get = orig
     check("放大窗口里按窗口坐标点「单人」：触发", res.get("mode") == "single", res)
@@ -279,7 +294,7 @@ def u10():
     MAIN.draw_confirm(screen, f, True, 1.5)
     check("退出确认：文字画在逻辑画布并缩放", ((1280, 720), (1920, 1080)) in CALLS, CALLS)
     CALLS.clear()
-    MAIN.UI_STATE["pref"] = 1.0
+    MAIN.UI_STATE["pref"] = 1.5
     MAIN.show_message(screen, f, ["正在连接主机…"])
     check("连接提示：缩放", ((1280, 720), (1920, 1080)) in CALLS, CALLS)
     CALLS.clear()

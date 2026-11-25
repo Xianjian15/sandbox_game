@@ -20,9 +20,12 @@ class BuildMenu:
         pygame.draw.line(surface, (100, 100, 110), (0, menu_y), (screen_w, menu_y), 2)
 
         self.buttons.clear()
-        start_x = screen_w // 2 - (len(BUILDING_DEFS) * 120) // 2
+        n = len(BUILDING_DEFS)
+        pitch = min(120, (screen_w - 16) // max(1, n))           # 放不下时按钮自动变窄，保证全部可见
+        bw = max(60, pitch - 12)
+        start_x = screen_w // 2 - (n * pitch) // 2
         for i, (kind, data) in enumerate(BUILDING_DEFS.items()):
-            rect = pygame.Rect(start_x + i * 120, menu_y + 10, 100, 60)
+            rect = pygame.Rect(start_x + i * pitch + (pitch - bw) // 2, menu_y + 10, bw, 60)
             self.buttons.append((rect, kind))
 
             variants = data["variants"]
@@ -68,9 +71,11 @@ class BuildMenu:
             variants = BUILDING_DEFS[self.active_kind]["variants"]
             unlocked_mats = [(m, d) for m, d in variants.items() if research.is_unlocked(self.active_kind, m)]
 
-            start_sx = screen_w // 2 - (len(unlocked_mats) * 120) // 2
+            spitch = min(120, (screen_w - 16) // max(1, len(unlocked_mats)))
+            sbw = max(60, spitch - 12)
+            start_sx = screen_w // 2 - (len(unlocked_mats) * spitch) // 2
             for i, (mat_key, mat_data) in enumerate(unlocked_mats):
-                r = pygame.Rect(start_sx + i * 120, sub_y + 10, 100, 40)
+                r = pygame.Rect(start_sx + i * spitch + (spitch - sbw) // 2, sub_y + 10, sbw, 40)
                 self.sub_buttons.append((r, self.active_kind, mat_key))
 
                 is_selected = (current_kind == self.active_kind and current_mat == mat_key)

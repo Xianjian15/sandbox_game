@@ -148,6 +148,7 @@ class GameWorld:
         self.animal_respawn_timer = 10.0
         self.MAX_ANIMALS = 20
         self.enemy_invasion_timer = self.game_time.day_length_sec * 3
+        self.waves_spawned = 0
 
         self.mode = None
         self.current_build_kind = None
@@ -282,7 +283,11 @@ class GameWorld:
         if (lw, lh) != (self.ui_w, self.ui_h) or not hasattr(self, "_ui_inited"):
             self.ui_w, self.ui_h = lw, lh
             self._ui_inited = True
-        self.bhud.panel_rect.x = lw - self.bhud.panel_w - 20       # 右侧面板贴着逻辑画面的右边
+
+    def _place_hud(self):
+        """小人面板：左下角、在底部界面（工具栏/建造菜单）上方。底部界面高度随模式变化，所以每次都重新摆。"""
+        n = len(self.selected_colonists())
+        self.hud.layout(self.ui_h, self.get_bottom_ui_height(), n)
 
     def _L(self, pos):
         """窗口坐标 → 界面逻辑坐标。界面的点击判定一律用它；地图相关（相机/选择框）仍用窗口坐标。"""
@@ -297,6 +302,7 @@ class GameWorld:
         """mouse_pos 是窗口坐标（pygame.mouse.get_pos()）。"""
         mouse_pos = self._L(mouse_pos)
         selected_cols = self.selected_colonists()
+        self._place_hud()
         if self.hud.panel_rect.collidepoint(mouse_pos) and selected_cols: return True
         if self.bhud.panel_rect.collidepoint(mouse_pos) and self.selected_building: return True
         if self.shud.panel_rect.collidepoint(mouse_pos) and self.selected_stockpile: return True
@@ -793,6 +799,61 @@ class GameWorld:
             self._world_step()
         self.turn += 1
 
+    # ---- 敌人入侵：数量/装备规则 ----
+    SOLO_ENEMY_CAP = 3
+    WAVE_WEAPONS = [
+        ["fist", "club"],            # 威胁 0
+        ["club", "spear"],           # 1
+        ["spear", "axe"],            # 2
+        ["axe", "pistol"],           # 3
+        ["pistol", "longsword"],     # 4
+        ["longsword", "rifle"],      # 5+
+    ]
+
+    def enemy_cap(self):
+        """单波敌人数上限：联机=玩家总数；单人=3（装备另行削弱）。"""
+        return max(1, self.num_players) if self.num_players > 1 else self.SOLO_ENEMY_CAP
+
+    def threat_level(self):
+        lvl = (self.game_time.day - 1) // 2 + self.waves_spawned
+        if self.num_players <= 1:
+            lvl -= 1                      # 单人：武器更弱
+        return max(0, lvl)
+
+    def _spawn_wave(self):
+        """实际生成一波敌人；只按"真正生成成功"的数量播报。"""
+        if self.rng.random() >= 0.5:
+            return
+        lvl = self.threat_level()
+        cap = self.enemy_cap()
+        cap_by_level = min(cap, 1 + lvl // 2)
+        want = self.rng.randint(max(1, cap_by_level - 1), cap_by_level)
+        pool = self.WAVE_WEAPONS[min(lvl, len(self.WAVE_WEAPONS) - 1)]
+        spawned = 0
+        for _ in range(want):
+            for _try in range(30):          # 边缘出生点可能不可走，多试几次
+                side = self.rng.randint(0, 3)
+                if side == 0:
+                    ex, ey = self.rng.randint(5, MAP_WIDTH - 5), 5
+                elif side == 1:
+                    ex, ey = self.rng.randint(5, MAP_WIDTH - 5), MAP_HEIGHT - 5
+                elif side == 2:
+                    ex, ey = 5, self.rng.randint(5, MAP_HEIGHT - 5)
+                else:
+                    ex, ey = MAP_WIDTH - 5, self.rng.randint(5, MAP_HEIGHT - 5)
+                if self.world.is_walkable(ex, ey):
+                    self.enemies.append(Enemy(ex, ey, self.rng.choice(pool), ctx=self.ctx))
+                    spawned += 1
+                    break
+        if spawned == 0:
+            self.enemy_invasion_timer = self.game_time.day_length_sec * 0.25   # 没生成成功：不报警，稍后重试
+            return
+        self.waves_spawned += 1
+        msg = f"警告：发现 {spawned} 名敌人入侵！"
+        self.log.add(msg, (255, 50, 50))
+        self.warning_text = msg
+        self.warning_timer = 3.0
+
     def _world_step(self):
         """推进世界恰好一个 tick（纯模拟）。"""
         dt = TICK_DT
@@ -833,23 +894,7 @@ class GameWorld:
         self.enemy_invasion_timer -= dt
         if self.enemy_invasion_timer <= 0:
             self.enemy_invasion_timer = self.game_time.day_length_sec * 3
-            if self.rng.random() < 0.5:
-                count = self.rng.randint(1, 3)
-                for _ in range(count):
-                    side = self.rng.randint(0, 3)
-                    if side == 0:
-                        ex, ey = self.rng.randint(5, MAP_WIDTH - 5), 5
-                    elif side == 1:
-                        ex, ey = self.rng.randint(5, MAP_WIDTH - 5), MAP_HEIGHT - 5
-                    elif side == 2:
-                        ex, ey = 5, self.rng.randint(5, MAP_HEIGHT - 5)
-                    else:
-                        ex, ey = MAP_WIDTH - 5, self.rng.randint(5, MAP_HEIGHT - 5)
-                    if self.world.is_walkable(ex, ey):
-                        self.enemies.append(Enemy(ex, ey, self.rng.choice(["club", "spear", "longsword", "fist"]), ctx=self.ctx))
-                self.log.add(f"警告：发现 {count} 名敌人入侵！", (255, 50, 50))
-                self.warning_text = f"警告：发现 {count} 名敌人入侵！"
-                self.warning_timer = 3.0
+            self._spawn_wave()
 
         # 每个 tick 都消费 recent_shot（一帧可能跑多个 tick，留到渲染时再取会丢弹道）
         for c in self.colonists:
@@ -1026,6 +1071,7 @@ class GameWorld:
 
         selected_cols = self.selected_colonists()
         if selected_cols:
+            self._place_hud()
             self.hud.draw(surface, self.colonists, selected_cols, self.camera)
         elif self.selected_building:
             self.bhud.draw(surface, self.selected_building, totals, self.research_mgr)

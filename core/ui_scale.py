@@ -6,11 +6,11 @@
 再整体平滑缩放到窗口大小；鼠标坐标反过来除以缩放比例交给界面。地图本身仍按真实分辨率绘制——
 窗口越大看到的地图越多，只有界面跟着放大。
 
-  缩放比例 = min(窗口宽/1280, 窗口高/720) × 玩家偏好，限制在 [MIN_SCALE, MAX_SCALE]，按 1/20 取整
-  （取整是为了拖动窗口边缘时逻辑尺寸不会每个像素都在变，也让 1280×720 / 1920×1080 恰好是 1.0 / 1.5）。
+  缩放比例 = min(1, 窗口宽/1280, 窗口高/720) × 玩家偏好（默认 0.85），限制在 [MIN_SCALE, MAX_SCALE]，按 1/20 取整。
+  窗口变大时界面大小不变（只在窗口小于 1280×720 时才缩小以放得下）；想要更大/更小用 Ctrl +/-。
 
 玩家偏好：Ctrl + "+" / Ctrl + "-" 调整界面大小，Ctrl + 0 恢复，保存在用户数据目录的 ui.json。
-缩放比例恰好为 1.0 时直接画在屏幕上，零额外开销。
+缩放比例恰好为 1.0 时（偏好调到 100% 且窗口不小于 1280×720）直接画在屏幕上，零额外开销。
 """
 import json
 import math
@@ -18,12 +18,14 @@ import os
 
 BASE_W, BASE_H = 1280, 720
 MIN_SCALE, MAX_SCALE = 0.6, 3.0
-PREF_STEPS = (0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 1.75, 2.0)
-DEFAULT_PREF = 1.0
+PREF_STEPS = (0.6, 0.7, 0.85, 1.0, 1.125, 1.25, 1.5, 1.75, 2.0)
+DEFAULT_PREF = 0.85          # 默认略小于设计尺寸：按钮/字体不会显得太大
+PREF_KEY = "ui_pref_v2"       # 换了默认值，旧的 ui_pref 作废（旧默认 1.0 会让界面偏大）
 
 
 def compute_scale(w, h, pref=DEFAULT_PREF):
-    base = min(max(1, w) / BASE_W, max(1, h) / BASE_H)
+    # 窗口变大时界面不放大（按钮大小不变，地图能看到更多）；窗口比设计尺寸小才按比例缩小，保证放得下
+    base = min(1.0, max(1, w) / BASE_W, max(1, h) / BASE_H)
     s = max(MIN_SCALE, min(MAX_SCALE, base * pref))
     return round(s * 20) / 20.0
 
@@ -63,7 +65,7 @@ def pref_delta_for_key(key, mods):
 def load_pref(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            v = float(json.load(f).get("ui_pref", DEFAULT_PREF))
+            v = float(json.load(f).get(PREF_KEY, DEFAULT_PREF))
         return v if PREF_STEPS[0] <= v <= PREF_STEPS[-1] else DEFAULT_PREF
     except (OSError, ValueError, TypeError, AttributeError):
         return DEFAULT_PREF
@@ -73,7 +75,7 @@ def save_pref(path, pref):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"ui_pref": pref}, f)
+            json.dump({PREF_KEY: pref}, f)
         return True
     except OSError:
         return False

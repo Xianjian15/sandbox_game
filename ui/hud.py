@@ -9,6 +9,12 @@ class HUD:
         self.font = font
         self.panel_rect = pygame.Rect(10, 60, 320, 190)
 
+    def layout(self, ui_h, bottom_h, n_selected=1, margin=10):
+        """小人面板放在左下角，紧贴在底部工具栏/建造菜单的上方（不盖住它们）。"""
+        self.panel_rect.h = 190 + (20 if n_selected > 1 else 0)
+        self.panel_rect.x = margin
+        self.panel_rect.y = max(40, ui_h - bottom_h - self.panel_rect.h - margin)
+
     def draw(self, surface, colonists, selected_colonists, camera):
         if not selected_colonists: return
 

@@ -80,6 +80,7 @@ class MenuModel:
         self.sel = 0
         self.result = None
         self.text = ""                    # 房间名输入框
+        self.composition = ""             # 输入法正在组合、尚未确认的文字（拼音等），只用于显示
         self.message = []                 # message 页的文字
         self.message_back = "main"
         self.finder = None
@@ -321,9 +322,15 @@ class MenuModel:
             self.do({"main": "quit", "lobby": "back", "create": "back_lobby", "hosting": "cancel_host",
                      "joining": "cancel_join", "message": "ok", "profile": "cancel_profile"}.get(self.screen, "back"))
         elif name == "backspace" and self.screen in ("create", "profile"):
-            self.text = self.text[:-1]
+            if not self.composition:            # 输入法组合中，退格属于输入法，不删已确认的字
+                self.text = self.text[:-1]
+
+    def text_editing(self, s):
+        """输入法组合中的文字（如拼音）：显示在输入框里，确认后会以 TEXTINPUT 送达。"""
+        self.composition = "".join(ch for ch in (s or "") if ch.isprintable()) if self.screen in ("create", "profile") else ""
 
     def text_input(self, s):
+        self.composition = ""
         if self.screen in ("create", "profile"):
             limit = NAME_MAX if self.screen == "create" else PNAME_MAX
             self.text = (self.text + "".join(ch for ch in s if ch.isprintable()))[:limit]
@@ -511,8 +518,25 @@ def draw_menu(screen, fonts, model):
             pygame.draw.rect(screen, (30, 33, 42), (wd.x, wd.y, wd.w, wd.h), border_radius=6)
             pygame.draw.rect(screen, (140, 170, 220), (wd.x, wd.y, wd.w, wd.h), 2, border_radius=6)
             cursor = "|" if int(time.monotonic() * 2) % 2 == 0 else ""
-            surf = big.render(wd.text + cursor, True, (255, 255, 255))
-            screen.blit(surf, (wd.x + 14, wd.y + (wd.h - surf.get_height()) // 2))
+            comp = getattr(model, "composition", "")
+            head = big.render(wd.text, True, (255, 255, 255)) if wd.text else None
+            tail = big.render(comp, True, (255, 220, 120)) if comp else None
+            cur = big.render(cursor, True, (255, 255, 255)) if cursor else None
+            parts = [x for x in (head, tail, cur) if x is not None]
+            total = sum(x.get_width() for x in parts)
+            inner = wd.w - 28
+            ty = wd.y + (wd.h - big.get_height()) // 2
+            ox = wd.x + 14 - max(0, total - inner)          # 文字太长时只显示末尾，光标始终可见
+            clip = screen.get_clip()
+            screen.set_clip(pygame.Rect(wd.x + 8, wd.y + 2, wd.w - 16, wd.h - 4))
+            cx_ = ox
+            for x in parts:
+                screen.blit(x, (cx_, ty))
+                if x is tail:                                # 组合中的文字加下划线
+                    pygame.draw.line(screen, (255, 220, 120), (cx_, ty + big.get_height() - 2),
+                                     (cx_ + x.get_width(), ty + big.get_height() - 2), 2)
+                cx_ += x.get_width()
+            screen.set_clip(clip)
     ver = font.render(f"v{GAME_VERSION}", True, (90, 95, 105))
     screen.blit(ver, (w - ver.get_width() - 12, h - 28))
     foot = {"main": "↑↓ 选择   Enter 确认   Esc 退出", "lobby": "点击房间加入   Esc 返回",
@@ -521,6 +545,19 @@ def draw_menu(screen, fonts, model):
     if foot:
         surf = font.render(foot, True, (110, 115, 125))
         screen.blit(surf, (w // 2 - surf.get_width() // 2, h - 28))
+
+
+def _place_ime(screen, model, scale):
+    """把输入法候选窗口放到输入框旁边（中文输入必需，否则候选框飘在屏幕角落）。"""
+    try:
+        import pygame
+        for wd in model._last_widgets:
+            if wd.kind == "input":
+                pygame.key.set_text_input_rect(pygame.Rect(int(wd.x * scale), int(wd.y * scale),
+                                                           int(wd.w * scale), int(wd.h * scale)))
+                return
+    except Exception:                                                    # noqa: BLE001
+        pass
 
 
 def run_menu(screen, fonts, clock, cfg=None):
@@ -558,6 +595,8 @@ def run_menu(screen, fonts, clock, cfg=None):
                     model.click(uis.to_logical(event.pos, scale), w, h)
                 elif event.type == pygame.KEYDOWN and event.key in keymap:
                     model.key(keymap[event.key])
+                elif event.type == pygame.TEXTEDITING:
+                    model.text_editing(event.text)
                 elif event.type == pygame.TEXTINPUT:
                     model.text_input(event.text)
                 elif event.type == pygame.DROPFILE:
@@ -566,6 +605,7 @@ def run_menu(screen, fonts, clock, cfg=None):
             scale = uis.compute_scale(*screen.get_size(), pref)
             draw_menu(layer.begin(screen, scale), fonts, model)
             layer.end(screen)
+            _place_ime(screen, model, scale)
             pygame.display.flip()
             clock.tick(30)
     finally:

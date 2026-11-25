@@ -83,6 +83,8 @@ class Surface:
     def fill(self, c, *a): self.fills.append(c)
     def blit(self, src, pos, *a): self.blits.append((src, pos))
     def set_alpha(self, v): pass
+    def set_clip(self, r=None): self._clip = r
+    def get_clip(self): return getattr(self, '_clip', None)
     def set_colorkey(self, *a): pass
     def copy(self): return Surface(self.size, self.flags)
     def convert(self): return self
@@ -122,7 +124,7 @@ def install():
     pg.error = type("error", (Exception,), {})
     pg.SRCALPHA, pg.RESIZABLE, pg.FULLSCREEN = 0x10000, 0x10, 0x80000000
     names = ["QUIT", "KEYDOWN", "KEYUP", "MOUSEBUTTONDOWN", "MOUSEBUTTONUP", "MOUSEMOTION", "VIDEORESIZE",
-             "TEXTINPUT", "DROPFILE"]
+             "TEXTINPUT", "DROPFILE", "TEXTEDITING"]
     for i, n in enumerate(names):
         setattr(pg, n, 100 + i)
     keys = "ESCAPE RETURN KP_ENTER BACKSPACE UP DOWN SPACE EQUALS PLUS MINUS KP_PLUS KP_MINUS KP_0 TAB F10 F11 LEFT RIGHT DELETE".split()
@@ -133,7 +135,7 @@ def install():
     pg.init = pg.quit = lambda *a: None
     pg.event = types.SimpleNamespace(Event=Event, get=lambda: [], post=lambda e: None)
     pg.mouse = types.SimpleNamespace(_pos=(0, 0), get_pos=lambda: pg.mouse._pos)
-    pg.key = types.SimpleNamespace(_mods=0, get_mods=lambda: pg.key._mods, start_text_input=lambda: None,
+    pg.key = types.SimpleNamespace(_mods=0, get_mods=lambda: pg.key._mods, start_text_input=lambda: None, set_text_input_rect=lambda r: None,
                                    stop_text_input=lambda: None)
     pg.time = types.SimpleNamespace(get_ticks=lambda: 0, wait=lambda ms: None,
                                     Clock=lambda: types.SimpleNamespace(tick=lambda fps=0: 16))

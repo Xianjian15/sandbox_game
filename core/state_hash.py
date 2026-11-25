@@ -53,7 +53,7 @@ def _digest(x):
 def world_sections(g):
     s = {}
     s["time"] = _digest((g.game_time.tick, g.turn, canon(g.game_speed),
-                         canon(g.animal_respawn_timer), canon(g.enemy_invasion_timer)))
+                         canon(g.animal_respawn_timer), canon(g.enemy_invasion_timer), g.waves_spawned))
     s["ctx"] = _digest(g.ctx.snapshot())
     s["colonists"] = _digest([obj_state(c) for c in sorted(g.colonists, key=lambda e: e.id)])
     s["enemies"] = _digest([obj_state(e) for e in sorted(g.enemies, key=lambda e: e.id)])
