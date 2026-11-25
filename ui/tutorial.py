@@ -1,0 +1,270 @@
+# ui/tutorial.py
+"""新手教程：分页的图文说明（纯界面，不参与模拟，不影响联机同步）。
+
+打开方式：首次启动自动弹出 / 主菜单「新手教程」 / 游戏里按 F1。
+翻页：点「下一页」「上一页」，或键盘 ← → / Enter；Esc 关闭（跳过）。
+内容是纯数据（PAGES），改文字只需改这里。行格式：
+    ("h", "小标题")            ("k", "按键/操作", "作用")            ("t", "普通说明文字")            ("s", "")  空行
+"""
+import os
+
+PAGES = [
+    ("欢迎来到殖民地", [
+        ("t", "你要带领一小队殖民者在荒野里活下去、建起家园。"),
+        ("s", ""),
+        ("h", "一局游戏的大致流程"),
+        ("k", "1. 采集", "砍树得到木头，采浆果、打猎得到食物"),
+        ("k", "2. 建造", "盖地板、墙、门、床，划定库存区存放物资"),
+        ("k", "3. 研究", "用研究台研究科技，解锁石墙、农业、熔炉、武器…"),
+        ("k", "4. 防御", "每隔几天会有敌人入侵，给小人装备武器、守住家园"),
+        ("s", ""),
+        ("t", "小人不会自己乱跑去干活——你下命令，他们才行动（饿了、累了会自己吃饭睡觉）。"),
+        ("t", "接下来几页会教你每个操作。随时按 F1 重新打开本教程。"),
+    ]),
+    ("看地图与选小人", [
+        ("h", "移动视角"),
+        ("k", "鼠标移到屏幕边缘", "视角朝该方向滚动"),
+        ("k", "按住鼠标右键拖动", "拖着地图走（只拖动不会下命令）"),
+        ("s", ""),
+        ("h", "选中小人"),
+        ("k", "左键点击小人", "选中他（左下角显示饱食/精力/心情/武器）"),
+        ("k", "左键拖出方框", "框选多个小人"),
+        ("k", "Shift + 左键点小人", "在已选中的基础上追加"),
+        ("k", "点空地 / 按 Esc", "取消选择"),
+        ("s", ""),
+        ("t", "左键点建筑、物品堆、库存区，会打开对应的信息面板。"),
+    ]),
+    ("指挥小人：右键", [
+        ("t", "先选中小人，再在目标上点【鼠标右键】——游戏会按你点到的东西自动判断做什么："),
+        ("k", "右键空地", "走过去"),
+        ("k", "右键树/石头/浆果丛", "去采集"),
+        ("k", "右键地上的物品", "搬运到库存区（武器/工具则是装备上）"),
+        ("k", "右键蓝图（淡色的建筑虚影）", "去建造它"),
+        ("k", "右键动物", "去狩猎"),
+        ("k", "右键敌人", "攻击"),
+        ("k", "右键研究台/烹饪台/熔炉等", "去使用它"),
+        ("k", "Shift + 右键", "不打断当前工作，加入任务队列依次做"),
+        ("s", ""),
+        ("t", "没选中小人时，右键什么也不会发生。"),
+    ]),
+    ("底部工具栏与快捷键", [
+        ("t", "屏幕底部的按钮和键盘快捷键是一一对应的；再按一次（或按 Esc / 点「关闭」）退出该模式。"),
+        ("k", "建造  B", "打开建造菜单，选建筑后在地图上拖出范围"),
+        ("k", "农业  F", "在地图上拖出一块农田，再选种浆果/树（需研究农业）"),
+        ("k", "库存  S", "拖出库存区，小人会把散落物资搬进去；点库存区可改优先级"),
+        ("k", "拆除  X", "拖出范围，拆掉里面的建筑；点已建成的建筑也能在面板里拆"),
+        ("k", "科技  R", "打开科技树，点一项开始研究（需要小人在研究台工作）"),
+        ("k", "采集", "拖出范围，范围内的树/资源会被标记，空闲小人自动去采"),
+        ("k", "狩猎", "拖出范围，范围内的动物会被标记，小人自动去打"),
+    ]),
+    ("建造", [
+        ("k", "1. 按 B", "打开建造菜单（灰色“未解锁”的需要先研究）"),
+        ("k", "2. 点一个建筑", "有多种材料时再选一次材料（木/石…），看价格"),
+        ("k", "3. 左键拖出范围", "在地图上画出要建的位置，会生成蓝图"),
+        ("k", "R", "长条形建筑（如床）按 R 旋转方向"),
+        ("k", "4. 选中小人 → 右键蓝图", "小人才会去搬材料、动手建造"),
+        ("s", ""),
+        ("h", "小提示"),
+        ("t", "· 材料不够时蓝图建不成：先砍树/采石头，物资要放进库存区或柜子里才算数。"),
+        ("t", "· 建房间：用墙围一圈再铺地板、放门；按 T 可查看房间美观度。"),
+        ("t", "· 建错了：按 X 拆除，或点中建筑在面板里点“拆除”。"),
+    ]),
+    ("食物、库存与农业", [
+        ("t", "小人有三条状态：饱食、精力、心情。饿了会自己找吃的，累了会自己睡觉。"),
+        ("t", "受伤后只要不流血、不挨饿，血量会随时间慢慢自己恢复；睡觉恢复更快。"),
+        ("s", ""),
+        ("h", "怎么有稳定的食物"),
+        ("k", "采集浆果 / 狩猎", "最早的食物来源：用【采集】【狩猎】按钮划范围"),
+        ("k", "库存区 S", "划一块库存区，物资搬进去，小人吃饭、建造才拿得到"),
+        ("k", "农业 F", "研究“基础农业”后可种浆果；种好会自动收获"),
+        ("k", "烹饪台", "点选后设置要做的饭菜数量，右键它让小人去做"),
+        ("s", ""),
+        ("t", "柜子可以存物品：右键柜子打开面板，输入数量后点“取出”。"),
+    ]),
+    ("研究与工作站", [
+        ("t", "研究台、烹饪台、熔炉、工作台都叫“工作站”：先点选它设置任务，再选小人右键它。"),
+        ("k", "研究台", "按 R 点选一个科技；让小人右键研究台去研究，进度条走满即解锁"),
+        ("k", "工作台", "（先研究石工技术）点选后点按钮添加制造：石镐、斧、长剑、枪…"),
+        ("k", "熔炉", "（先研究粗铁精炼）把粗铁炼成铁，铁用来做更好的装备"),
+        ("k", "Shift + 右键工作站", "把“去使用”排进队列，不打断正在做的事"),
+        ("s", ""),
+        ("t", "做出的武器会掉在地上：选中小人，右键那件武器就会装备上。"),
+        ("t", "小人有“武器槽”和“工具槽”，面板里能看到当前装备和伤害。"),
+    ]),
+    ("战斗与敌人", [
+        ("t", "每隔几天可能有敌人从地图边缘入侵，屏幕上方会弹出红色警告和数量。"),
+        ("k", "选中小人 → 右键敌人", "攻击；多个小人一起上更稳"),
+        ("k", "装备更好的武器", "近战看伤害，枪类可以远程射击"),
+        ("k", "血量低时", "把小人撤回后方，等血量自动恢复"),
+        ("s", ""),
+        ("h", "难度规则"),
+        ("t", "· 敌人会随天数和来袭次数变强：先是拳头木棒，后期有长剑、枪。"),
+        ("t", "· 单人最多同时来 3 个敌人；联机时同一波不超过玩家人数。"),
+        ("t", "· 墙、门可以挡路，把基地围起来更安全。"),
+    ]),
+    ("时间与界面快捷键", [
+        ("k", "空格", "切换游戏速度：暂停 → 1x → 2x → 3x"),
+        ("k", "F1", "打开本教程"),
+        ("k", "H", "快捷键速查面板"),
+        ("k", "T", "显示 / 隐藏房间美观度"),
+        ("k", "Esc", "退出当前模式 / 取消选择 / 关闭面板"),
+        ("k", "F10", "返回主菜单（会先确认）"),
+        ("k", "F11", "全屏 / 窗口切换"),
+        ("k", "Ctrl + / Ctrl -", "放大 / 缩小界面；Ctrl 0 恢复默认"),
+        ("s", ""),
+        ("t", "暂停时依然可以下命令、建蓝图，适合在紧张时慢慢想。"),
+    ]),
+    ("多人联机", [
+        ("t", "在主菜单选「多人游戏」：一个人「创建房间」，其他人在同一局域网里点房间加入（最多 4 人）。"),
+        ("k", "各自的小人", "每位玩家只能选中、指挥自己的小人；别人的小人头顶有他的用户名"),
+        ("k", "顶部玩家栏", "显示每个人的头像和用户名；离开的玩家会变灰"),
+        ("k", "资源共享", "建筑、库存、研究是大家共用的"),
+        ("k", "游戏速度", "所有人看到的时间流速一致，谁按空格都生效"),
+        ("k", "个人资料", "主菜单里可以改用户名（支持中文）和头像"),
+        ("s", ""),
+        ("t", "联机时教程不会暂停游戏。大家要使用同一版本才能连上。"),
+        ("s", ""),
+        ("h", "祝你玩得开心！"),
+    ]),
+]
+
+
+def mark_path(data_file):
+    return data_file("tutorial_seen")
+
+
+def has_seen(data_file):
+    try:
+        return os.path.exists(mark_path(data_file))
+    except OSError:
+        return True            # 读不了就当看过，别每次都弹
+
+
+def mark_seen(data_file):
+    try:
+        with open(mark_path(data_file), "w", encoding="utf-8") as f:
+            f.write("1")
+    except OSError:
+        pass
+
+
+class Tutorial:
+    W, H = 780, 520
+
+    def __init__(self, on_close=None):
+        self.active = False
+        self.page = 0
+        self.on_close = on_close
+        self.rects = {}                 # name -> pygame.Rect（绘制时更新，点击时使用；逻辑坐标）
+
+    # ---- 状态 ----
+    def open(self, page=0):
+        self.active = True
+        self.page = max(0, min(len(PAGES) - 1, page))
+
+    def close(self):
+        if self.active and self.on_close:
+            try:
+                self.on_close()
+            except Exception:                                              # noqa: BLE001
+                pass
+        self.active = False
+
+    def next(self):
+        if self.page >= len(PAGES) - 1:
+            self.close()
+        else:
+            self.page += 1
+
+    def prev(self):
+        self.page = max(0, self.page - 1)
+
+    # ---- 输入：打开时吞掉所有输入，返回 True ----
+    def handle_key(self, key):
+        import pygame
+        if not self.active:
+            return False
+        if key in (pygame.K_ESCAPE, pygame.K_F1):
+            self.close()
+        elif key in (pygame.K_RIGHT, pygame.K_RETURN, pygame.K_KP_ENTER):
+            self.next()
+        elif key == pygame.K_LEFT:
+            self.prev()
+        return True
+
+    def handle_click(self, pos):
+        if not self.active:
+            return False
+        for name, r in self.rects.items():
+            if r.collidepoint(pos):
+                if name == "next":
+                    self.next()
+                elif name == "prev":
+                    self.prev()
+                elif name == "skip":
+                    self.close()
+                elif name.startswith("dot"):
+                    self.page = int(name[3:])
+                break
+        return True
+
+    # ---- 绘制（surface 是界面逻辑画布）----
+    def draw(self, surface, w, h, font, font_big):
+        if not self.active:
+            return
+        import pygame
+        dim = pygame.Surface((w, h), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 150))
+        surface.blit(dim, (0, 0))
+        pw, ph = min(self.W, w - 20), min(self.H, h - 20)
+        x, y = w // 2 - pw // 2, h // 2 - ph // 2
+        panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        panel.fill((20, 22, 28, 248))
+        surface.blit(panel, (x, y))
+        pygame.draw.rect(surface, (100, 160, 220), (x, y, pw, ph), 2, border_radius=6)
+
+        title, rows = PAGES[self.page]
+        surface.blit(font_big.render(f"新手教程  {self.page + 1}/{len(PAGES)}  ·  {title}", True, (120, 180, 240)), (x + 22, y + 16))
+        pygame.draw.line(surface, (70, 80, 95), (x + 18, y + 50), (x + pw - 18, y + 50), 1)
+
+        ky = y + 64
+        key_w = 240
+        for row in rows:
+            kind = row[0]
+            if kind == "s":
+                ky += 10
+            elif kind == "h":
+                surface.blit(font_big.render(row[1], True, (255, 210, 110)), (x + 24, ky)); ky += 28
+            elif kind == "t":
+                surface.blit(font.render(row[1], True, (225, 225, 230)), (x + 24, ky)); ky += 25
+            else:
+                kt = font.render(row[1], True, (130, 220, 160))
+                bg = pygame.Rect(x + 22, ky - 2, min(key_w, kt.get_width() + 16), kt.get_height() + 4)
+                pygame.draw.rect(surface, (35, 50, 45), bg, border_radius=4)
+                surface.blit(kt, (x + 30, ky))
+                surface.blit(font.render(row[2], True, (225, 225, 230)), (x + 22 + key_w + 12, ky))
+                ky += 26
+
+        # 底部：页码小圆点 + 按钮
+        self.rects = {}
+        by = y + ph - 54
+        bw, bh = 110, 38
+        last = self.page >= len(PAGES) - 1
+        specs = [("skip", "跳过 (Esc)", x + 20, (80, 40, 40), (220, 100, 100)),
+                 ("prev", "上一页", x + pw - 2 * bw - 40, (45, 45, 55), (150, 150, 165)),
+                 ("next", "开始游戏" if last else "下一页", x + pw - bw - 20, (50, 80, 110), (120, 180, 240))]
+        for name, label, bx, bg, fg in specs:
+            r = pygame.Rect(bx, by, bw, bh)
+            self.rects[name] = r
+            if name == "prev" and self.page == 0:
+                continue
+            pygame.draw.rect(surface, bg, r, border_radius=6)
+            pygame.draw.rect(surface, fg, r, 2, border_radius=6)
+            t = font.render(label, True, fg)
+            surface.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
+        n = len(PAGES)
+        dx0 = x + pw // 2 - (n * 18) // 2 - 70
+        for i in range(n):
+            r = pygame.Rect(dx0 + i * 18, by + 12, 14, 14)
+            self.rects[f"dot{i}"] = r
+            pygame.draw.circle(surface, (120, 180, 240) if i == self.page else (70, 75, 90), r.center, 5)

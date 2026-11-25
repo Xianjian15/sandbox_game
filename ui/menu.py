@@ -167,7 +167,8 @@ class MenuModel:
             label(f"殖民地建设 · 手动指挥 · 局域网多人联机（最多 {MAX_PLAYERS} 人）", h // 2 - 130, color="dim")
             button("单人游戏", h // 2 - 70, "single")
             button("多人游戏", h // 2 + 2, "multi")
-            button("退出", h // 2 + 74, "quit")
+            button("新手教程", h // 2 + 74, "tutorial")
+            button("退出", h // 2 + 146, "quit")
 
         elif self.screen == "lobby":
             label("多人游戏 · 局域网房间", 60, big=True)
@@ -354,6 +355,8 @@ class MenuModel:
     def do(self, action, data=None):
         if action == "single":
             self.result = {"mode": "single"}
+        elif action == "tutorial":
+            self.result = {"mode": "single", "tutorial": True}      # 开一局单人游戏并直接打开教程
         elif action == "quit":
             self.result = {"mode": "quit"}
         elif action == "multi":

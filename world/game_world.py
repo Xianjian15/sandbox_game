@@ -2,6 +2,7 @@
 import random
 import pygame
 
+from ui.tutorial import Tutorial
 from core.profile import PLAYER_COLORS
 from core.ui_scale import compute_scale, logical_size, to_logical, UiLayer, pref_text
 from settings import MAP_WIDTH, MAP_HEIGHT, TILE_SIZE, BLACK, WHITE, TICK_DT, START_COLONISTS
@@ -155,6 +156,7 @@ class GameWorld:
         self.current_build_mat = None
         self.build_rotation = 0
         self.show_help = False
+        self.tutorial = Tutorial()                       # 新手教程（F1 / 首次启动 / 主菜单）
         self.show_beauty = False
 
         self.pending_farm_rect = None
@@ -363,6 +365,17 @@ class GameWorld:
         mouse_in_ui = self.is_mouse_in_ui(mouse_pos)
 
         if event.type == pygame.VIDEORESIZE:
+            return
+
+        if self.tutorial.active:                            # 教程打开时吞掉所有输入（不影响游戏运行）
+            if event.type == pygame.KEYDOWN:
+                self.tutorial.handle_key(event.key)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and lpos is not None:
+                self.tutorial.handle_click(lpos)
+            return
+
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
+            self.tutorial.open()
             return
 
         if event.type == pygame.KEYDOWN:
@@ -1127,7 +1140,7 @@ class GameWorld:
                 "B : 建造菜单   |   F : 划定农业区",
                 "S : 划定库存   |   X : 拆除/删除模式",
                 "R : 建造时旋转 / 开启科技树",
-                "H / Esc : 打开/关闭此帮助面板",
+                "H / Esc : 打开/关闭此帮助面板   |   F1 : 新手教程",
                 "F11 : 切换全屏模式",
                 "Ctrl + / Ctrl - : 放大 / 缩小界面（Ctrl 0 复位）",
                 "T : 切换 房间美观度 透视"
@@ -1136,6 +1149,8 @@ class GameWorld:
                 line = self.font.render(txt, True, WHITE)
                 help_surf.blit(line, (30, 60 + i * 26))
             surface.blit(help_surf, (screen_w // 2 - 300, screen_h // 2 - 240))
+
+        self.tutorial.draw(surface, screen_w, screen_h, self.font, self.font_big)
 
         if self.toast_timer > 0 and self.toast_text:
             t = self.font_big.render(self.toast_text, True, (255, 255, 255))

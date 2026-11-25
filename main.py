@@ -10,6 +10,7 @@ from world.game_world import GameWorld
 from net.session import LockstepSession, DEFAULT_PORT, get_lan_ip
 from ui.menu import run_menu
 from ui.fonts import load_font, font_source
+from ui import tutorial
 from core.app_paths import setup_logging, report_crash, data_file, resource_path
 from core.version import GAME_VERSION, DISPLAY_NAME
 from core.profile import Profile, sanitize_name
@@ -89,7 +90,7 @@ def draw_confirm(screen, font, online, scale=1.0):
     _CONFIRM_LAYER.end(screen_real)
 
 
-def play(screen, clock, fonts, session, seed):
+def play(screen, clock, fonts, session, seed, show_tutorial=False):
     """开一局游戏（单机或联机），直到玩家关窗口或选择返回主菜单。返回 ("quit"/"menu", screen)。"""
     font, font_big, font_small, font_warn = fonts["normal"], fonts["big"], fonts["small"], fonts["warn"]
     if session is not None:
@@ -103,6 +104,9 @@ def play(screen, clock, fonts, session, seed):
     else:
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)
     game.ui_pref = UI_STATE["pref"]
+    game.tutorial.on_close = lambda: tutorial.mark_seen(data_file)      # 看过一次后不再自动弹出（F1 随时可开）
+    if show_tutorial or not tutorial.has_seen(data_file):
+        game.tutorial.open()
     game.set_screen_size(*screen.get_size())          # 按当前窗口大小初始化相机和界面缩放
     desync_dumped = False
     is_fullscreen = False
@@ -280,7 +284,7 @@ def main():
         if choice["mode"] == "quit":
             break
         session = choice.get("session")             # 单机为 None
-        leave, screen = play(screen, clock, fonts, session, args.seed)
+        leave, screen = play(screen, clock, fonts, session, args.seed, show_tutorial=bool(choice.get("tutorial")))
         if leave == "quit":
             break
         pygame.display.set_caption(window_title())
