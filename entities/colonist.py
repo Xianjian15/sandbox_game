@@ -262,6 +262,10 @@ class Colonist:
         self._release_job()
         self.path, self.state, self.state_timer = p, "going_to_eat", 0.0
         self._eat_target = (tx, ty, b)
+        if not p:
+            # 已经站在食物上（或柜子旁）：路径是空的，永远不会触发"到达"。
+            # 旧行为：1.5 秒后被防卡死机制放弃，再重新"去吃饭"，如此循环、一口也吃不上。直接就地吃。
+            self._on_arrive(world, items, buildings)
         return True
 
     def _go_sleep(self, world, buildings, bed_tile, is_medical=False):
@@ -274,6 +278,8 @@ class Colonist:
         if b:
             b.occupied_by = self.id
             if is_medical: self.is_patient = True
+        if not p:
+            self.state = "sleeping"        # 已经站在床上：路径为空，不会触发"到达"，直接躺下（同吃饭卡住的原因）
         return True
 
     def _wake_up(self):
