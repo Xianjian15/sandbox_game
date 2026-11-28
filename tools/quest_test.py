@@ -94,18 +94,32 @@ check("Q7 定时器到点会生成随机任务（有上限）", sum(1 for q in g
 g = mk(); h0 = world_hash(g); g.quests.done += 1
 check("Q8 任务状态参与哈希", world_hash(g) != h0)
 
-# Q9 面板：绘制、点标题收起、Q 键
+# Q9 面板：打开才出现（不再常驻遮挡）；Q 键/工具栏开关；面板内点击不穿透
 g = mk(); run(g, 60 * 25)
 def draw(g):
     s = pygame.Surface((g.ui_w, g.ui_h)); g._draw_ui(s, g.ui_w, g.ui_h); g.set_screen_size(W, H)
+def key(g, k):
+    g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode=""), W, H)
+def click(g, p):
+    g.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(int(p[0] * g.ui_scale), int(p[1] * g.ui_scale)), button=1), W, H)
 draw(g)
-check("Q9 面板能画出且占用了矩形", g.quest_rect is not None and g.quest_rect.h > 24, g.quest_rect)
-r = g.quest_rect; p = (r.x + 20, r.y + 8)
-g.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(int(p[0] * g.ui_scale), int(p[1] * g.ui_scale)), button=1), W, H)
-draw(g)
-check("Q9 点标题栏收起面板", g.show_quests is False and g.quest_rect.h == 24, (g.show_quests, g.quest_rect))
-g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_q, mod=0, unicode="q"), W, H)
-check("Q9 按 Q 展开", g.show_quests is True)
+check("Q9 默认不打开、不再有常驻追踪框", g.mode is None and not hasattr(g, "quest_rect"))
+key(g, pygame.K_q); draw(g)
+check("Q9 按 Q 打开任务面板", g.mode == "quests" and g.quest_menu.panel_rect.h > 100, (g.mode, g.quest_menu.panel_rect))
+r = g.quest_menu.panel_rect
+check("Q9 面板内点击被吞掉（不会点到地图/别的面板）", g.is_mouse_in_ui((int((r.x + 20) * g.ui_scale), int((r.y + 20) * g.ui_scale))))
+click(g, (r.x + 30, r.y + 30))
+check("Q9 点面板内不会关闭它", g.mode == "quests")
+key(g, pygame.K_q)
+check("Q9 再按 Q 关闭", g.mode is None)
+btn = next(rc for rc, m in g.toolbar.buttons if m == "quests")
+click(g, btn.center); draw(g)
+check("Q9 工具栏「任务」按钮可打开", g.mode == "quests")
+key(g, pygame.K_ESCAPE)
+check("Q9 Esc 关闭", g.mode is None)
+# 打开任务面板后，工作台面板仍可点（面板不再常驻）
+g.mode = None; draw(g)
+check("Q9 关闭状态下左上角没有遮挡区域", not g.is_mouse_in_ui((20, 50)))
 
 # Q10 新内容：弩、书架、喷泉
 g = mk(); b = D._place(g, "workbench", "wood", 2, 1)

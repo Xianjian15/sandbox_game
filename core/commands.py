@@ -30,6 +30,7 @@ COMMAND_TYPES = {
     # —— 区域/设施类 ——
     "stockpile_add", "stockpile_remove", "farm_add",
     "build_area", "deconstruct_area", "harvest_area", "hunt_area",
+    "zone_set", "zone_clear",   # 持续采集/狩猎区：kind=harvest/hunt, on=1画/0擦, x1,y1,x2,y2
     # —— 建筑面板 ——
     "bld_decon", "bld_station_mode", "bld_craft_add", "bld_cook_set", "bld_cook_clear", "bld_smelt_set", "bld_smelt_clear",
     # —— 其他 ——

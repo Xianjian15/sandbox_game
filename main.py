@@ -393,7 +393,8 @@ def main():
         AUDIO.set_music("day")
         choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay, "profile": profile,
                                                     "ui_pref": UI_STATE["pref"], "on_ui_pref": change_ui_pref,
-                                                    "audio": AUDIO})
+                                                    "audio": AUDIO,
+                                                    "on_drop_audio": lambda p: AUDIO.pl.add_file(p)})
         if choice["mode"] == "quit":
             break
         if choice["mode"] == "settings":

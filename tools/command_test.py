@@ -154,6 +154,10 @@ def op_area_cmds_1(g, s):
     g.issue(cmdlib.make("stockpile_add", x1=x, y1=y, x2=x + 2, y2=y + 1))
     g.issue(cmdlib.make("harvest_area", x1=x - 14, y1=y - 14, x2=x + 14, y2=y + 14))
     g.issue(cmdlib.make("hunt_area", x1=x - 30, y1=y - 30, x2=x + 30, y2=y + 30))
+    g.issue(cmdlib.make("zone_set", kind="harvest", on=1, x1=x - 10, y1=y - 10, x2=x + 10, y2=y + 10))
+    g.issue(cmdlib.make("zone_set", kind="hunt", on=1, x1=x - 12, y1=y - 12, x2=x + 12, y2=y + 12))
+    g.issue(cmdlib.make("zone_set", kind="harvest", on=0, x1=x - 2, y1=y - 2, x2=x + 2, y2=y + 2))
+    g.issue(cmdlib.make("zone_clear", kind="hunt"))
 
 
 def op_build_area(g, s):

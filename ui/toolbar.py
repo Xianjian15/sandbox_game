@@ -20,13 +20,15 @@ class Toolbar:
             ("stockpile", "库存 (S)", (100, 150, 220)),
             ("deconstruct", "拆除 (X)", (220, 100, 100)),
             ("research", "科技 (R)", (100, 220, 180)),
-            ("harvest_area", "采集", (180, 220, 100)),   # 新增
-            ("hunt_area", "狩猎", (220, 100, 150))       # 新增
+            ("harvest_area", "采集区 (G)", (180, 220, 100)),
+            ("hunt_area", "狩猎区 (V)", (220, 100, 150)),
+            ("quests", "任务 (Q)", (240, 200, 100)),
+            ("music", "音乐 (P)", (200, 140, 240)),
         ]
 
         start_x = 20
         for i, (mode_key, label, color) in enumerate(tools):
-            rect = pygame.Rect(start_x + i * 105, y + 8, 95, 44)
+            rect = pygame.Rect(start_x + i * 108, y + 8, 100, 44)
             self.buttons.append((rect, mode_key))
 
             is_selected = (current_mode == mode_key)

@@ -301,6 +301,18 @@ def _harvest_area(g, cmd):
                 g.ctx.designated_harvests.add((tx, ty))
 
 
+def _zone_set(g, cmd):
+    kind = cmd["kind"]
+    x1, y1, x2, y2 = _rect(cmd)
+    if (x2 - x1 + 1) * (y2 - y1 + 1) > 4096:         # 防止一次框全图拖垮 UI
+        return
+    g.zones.paint(kind, x1, y1, x2, y2, 1 if cmd["on"] else 0, g.world.cols, g.world.rows)
+
+
+def _zone_clear(g, cmd):
+    g.zones.clear(cmd["kind"])
+
+
 def _hunt_area(g, cmd):
     x1, y1, x2, y2 = _rect(cmd)
     for a in g.animals:
@@ -389,6 +401,7 @@ HANDLERS = {
     "stockpile_add": _stockpile_add, "stockpile_remove": _stockpile_remove, "farm_add": _farm_add,
     "build_area": _build_area, "deconstruct_area": _deconstruct_area,
     "harvest_area": _harvest_area, "hunt_area": _hunt_area,
+    "zone_set": _zone_set, "zone_clear": _zone_clear,
     "bld_decon": _bld_decon, "bld_station_mode": _bld_station_mode, "bld_craft_add": _bld_craft_add, "bld_cook_set": _bld_cook_set,
     "bld_cook_clear": _bld_cook_clear, "bld_smelt_set": _bld_smelt_set, "bld_smelt_clear": _bld_smelt_clear,
     "research_set": _research_set, "toggle_haul": _toggle_haul, "speed": _speed,

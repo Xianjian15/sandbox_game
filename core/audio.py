@@ -11,6 +11,7 @@ import os
 import time
 
 from core.app_paths import resource_path
+from core.playlist import Playlist
 
 SFX_NAMES = ("click", "shot_pistol", "shot_rifle", "shot_shotgun", "shot_smg", "shot_sniper", "shot_bow", "melee",
              "enemy_down", "colonist_down", "build_done", "harvest_done", "quest_new", "quest_done", "alarm", "meteor")
@@ -39,8 +40,20 @@ class NullAudio:
     ok = False
     music_vol, sfx_vol, muted = DEFAULTS["music"], DEFAULTS["sfx"], False
     current = None
+    list_mode = False
+    paused = False
+    now_playing = None
+
+    def __init__(self):
+        self.pl = Playlist()                     # 空歌单（没有文件夹，纯内存）
 
     def play(self, name, vol=1.0): pass
+    def set_mode(self, mode): self.pl.mode = mode if mode in ("auto", "list") else "auto"
+    def play_index(self, i): pass
+    def play_pause(self): pass
+    def next_track(self): pass
+    def prev_track(self): pass
+    def cycle_loop(self): self.pl.cycle_loop()
     def set_music(self, track): pass
     def update(self): pass
     def set_music_volume(self, v): self.music_vol = clamp01(v)
@@ -51,8 +64,18 @@ class NullAudio:
 
 
 class AudioManager(NullAudio):
-    def __init__(self, path=None, mixer=None):
+    def __init__(self, path=None, mixer=None, music_dir=None, playlist_path=None):
         self.path = path
+        if path and music_dir is None:
+            music_dir = os.path.join(os.path.dirname(path), "music")
+            playlist_path = playlist_path or os.path.join(os.path.dirname(path), "playlist.json")
+        self.music_dir = music_dir
+        self.pl = Playlist(playlist_path, music_dir)
+        self.want_track = None         # 自动模式下"该放哪首"（歌单模式时先记着）
+        self.paused = False
+        self.now_playing = None        # 歌单模式：正在播的曲名
+        self._list_started = 0.0
+        self._fails = 0
         self.music_vol, self.sfx_vol, self.muted = DEFAULTS["music"], DEFAULTS["sfx"], DEFAULTS["mute"]
         self._load()
         self.mixer = mixer
@@ -71,6 +94,8 @@ class AudioManager(NullAudio):
             self.ok = True
         except Exception:               # noqa: BLE001  没有声卡等：静默
             self.ok = False
+        if self.ok and self.list_mode:   # 上次退出时是歌单模式：启动就接着放
+            self.play_index(self.pl.index)
 
     # ---- 设置存取 ----
     def _load(self):
@@ -140,7 +165,14 @@ class AudioManager(NullAudio):
                 pass
 
     # ---- 音乐 ----
+    @property
+    def list_mode(self):
+        return self.pl.mode == "list" and bool(self.pl.items)
+
     def set_music(self, track):
+        self.want_track = track
+        if self.list_mode:             # 歌单模式：自动换曲被忽略
+            return
         if track == self.current:
             return
         had = self.current is not None
@@ -153,8 +185,98 @@ class AudioManager(NullAudio):
             except Exception:           # noqa: BLE001
                 pass
 
+    # ---- 歌单 ----
+    def set_mode(self, mode):
+        mode = mode if mode in ("auto", "list") else "auto"
+        self.pl.mode = mode
+        self.pl.save()
+        self.paused = False
+        if mode == "list" and self.pl.items:
+            self.current, self._pending = None, None
+            self.play_index(self.pl.index)
+        else:
+            self.now_playing = None
+            self.current = None
+            if self.ok:
+                try: self.mixer.music.fadeout(400)
+                except Exception: pass       # noqa: BLE001
+            self._pending = None
+            if self.want_track:
+                t, self.want_track = self.want_track, None
+                self.set_music(t)
+
+    def play_index(self, i):
+        """播放歌单第 i 首（失败的文件会自动跳到下一首，全都失败就停下）。"""
+        if not (0 <= i < len(self.pl.items)):
+            return
+        self.pl.index = i
+        self.paused = False
+        self.now_playing = self.pl.items[i]["name"]
+        self._list_started = time.monotonic()
+        self.pl.save()
+        if not self.ok:
+            return
+        path = self.pl.full_path(i)
+        try:
+            self.mixer.music.load(path)
+            self.mixer.music.set_volume(0.0 if self.muted else self.music_vol)
+            self.mixer.music.play(loops=-1 if self.pl.loop == "one" else 0)
+            self._fails = 0
+        except Exception:               # noqa: BLE001  坏文件/不支持的编码
+            self._fails += 1
+            self.pl.status = f"无法播放：{self.now_playing}"
+            if self._fails < len(self.pl.items):
+                j = self.pl.next_index(1)
+                if j is not None and j != i:
+                    self.play_index(j)
+            else:
+                self.now_playing = None
+
+    def play_pause(self):
+        if not self.list_mode:
+            return
+        if self.now_playing is None:
+            self.play_index(self.pl.index)
+        elif self.paused:
+            self.paused = False
+            if self.ok:
+                try: self.mixer.music.unpause()
+                except Exception: pass       # noqa: BLE001
+        else:
+            self.paused = True
+            if self.ok:
+                try: self.mixer.music.pause()
+                except Exception: pass       # noqa: BLE001
+
+    def next_track(self):
+        j = self.pl.next_index(1)
+        if j is not None:
+            self.play_index(j)
+
+    def prev_track(self):
+        j = self.pl.next_index(-1) if self.pl.loop != "shuffle" else self.pl.next_index(1)
+        if j is not None:
+            self.play_index(j)
+
+    def cycle_loop(self):
+        self.pl.cycle_loop()
+        if self.ok and self.list_mode and self.now_playing is not None:
+            pass                         # 下一首起生效（当前曲的循环参数在 play 时已定）
+
     def update(self):
-        """每帧调用：到点就切到待播的曲目。"""
+        """每帧调用：收下载结果；自动模式到点切曲；歌单模式放完自动下一首。"""
+        for i in self.pl.poll():
+            pass
+        if self.list_mode:
+            if self.ok and self.now_playing is not None and not self.paused \
+                    and time.monotonic() - self._list_started > 1.0:
+                try:
+                    busy = self.mixer.music.get_busy()
+                except Exception:       # noqa: BLE001
+                    busy = True
+                if not busy:
+                    self.next_track()
+            return
         if self._pending is None or time.monotonic() < self._switch_at:
             return
         track, self._pending = self._pending, None

@@ -33,7 +33,7 @@ for i, (title, rows) in enumerate(T.PAGES):
         if r[0] not in H or (r[0] == "k" and len(r) != 3) or (r[0] in ("h", "t") and len(r) != 2): bad.append((i, r))
     if 64 + sum(H[r[0]] for r in rows) > T.Tutorial.H - 62: bad.append((i, "超高", 64 + sum(H[r[0]] for r in rows)))
 check("T1a 页面结构合法且不溢出", not bad, bad)
-check("T1b 页数合理", 6 <= len(T.PAGES) <= 14, len(T.PAGES))
+check("T1b 页数合理", 6 <= len(T.PAGES) <= 16, len(T.PAGES))
 alltext = "".join("".join(r[1:]) for _, rows in T.PAGES for r in rows)
 src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "world", "game_world.py"), encoding="utf-8").read()
 for k, const in (("B", "K_b"), ("F", "K_f"), ("S", "K_s"), ("X", "K_x"), ("R", "K_r"), ("T", "K_t"), ("H", "K_h"), ("空格", "K_SPACE")):

@@ -184,9 +184,9 @@ def u5():
     g = mk(W, H)
     g.mode = "stockpile"
     frame(g, W, H)
-    mouse(g, pygame.MOUSEBUTTONDOWN, to_native((900, g.ui_h - 30), 1.5), W, H)
+    mouse(g, pygame.MOUSEBUTTONDOWN, to_native((1100, g.ui_h - 30), 1.5), W, H)
     check("按在底部工具栏空白处：不开始框选", g.drag_start is None, g.drag_start)
-    mouse(g, pygame.MOUSEBUTTONUP, to_native((900, g.ui_h - 30), 1.5), W, H)
+    mouse(g, pygame.MOUSEBUTTONUP, to_native((1100, g.ui_h - 30), 1.5), W, H)
     mouse(g, pygame.MOUSEBUTTONDOWN, (800, 400), W, H)
     check("按在地图上：开始框选", g.drag_start is not None)
     mouse(g, pygame.MOUSEBUTTONUP, (800, 400), W, H)

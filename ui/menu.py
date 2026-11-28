@@ -73,6 +73,7 @@ class MenuModel:
         self.profile = cfg.get("profile") or Profile()              # 本机玩家资料（用户名 + 头像）
         self.avatar_picker = cfg.get("avatar_picker") or _default_picker     # 可注入（测试用）
         self.avatar_loader = cfg.get("avatar_loader") or _default_loader
+        self.on_drop_audio = cfg.get("on_drop_audio")                # 拖入音频文件：main 接到歌单
         self.edit_avatar = None                                      # 资料页里"尚未保存"的头像
         self.edit_gender = self.profile.gender
         self.profile_msg = ""
@@ -349,6 +350,8 @@ class MenuModel:
         """玩家把文件拖进窗口：在资料页里当作头像图片。"""
         if self.screen == "profile":
             self._load_avatar(path)
+        elif self.on_drop_audio is not None:
+            self.on_drop_audio(path)
 
     def _load_avatar(self, path):
         try:

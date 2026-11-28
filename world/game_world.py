@@ -56,6 +56,8 @@ class GameWorld:
         self.ctx.items = self.items
         self.stockpiles = StockpileManager()
         self.farms = FarmManager()
+        from systems.zones import ZoneManager
+        self.zones = ZoneManager()                       # 持续采集/狩猎区
         self.buildings = BuildingManager(self.research_mgr)
         self.ctx.buildings = self.buildings
         self.world.buildings = self.buildings
@@ -158,8 +160,12 @@ class GameWorld:
         self.meteors_spawned = 0
         from systems.quests import QuestManager
         self.quests = QuestManager(self.game_time.day_length_sec)    # 支线任务
-        self.show_quests = True
-        self.quest_rect = None
+        from ui.quest_menu import QuestMenu
+        self.quest_menu = QuestMenu(font)
+        from ui.music_panel import MusicPanel
+        self.music_panel = MusicPanel(font)
+        self.zone_erase = False                          # 采集/狩猎区：False=划定，True=擦除
+        self.zone_btns = []                              # [(rect, id)] 区域工具条（界面逻辑坐标）
         self.herd_timer = self.game_time.day_length_sec * 1.5      # 兽群迁徙
         self.herds_spawned = 0
         self.MAX_ANIMALS = self.MAX_ANIMALS_CAP
@@ -342,6 +348,13 @@ class GameWorld:
             vol = distance_volume(((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 / TILE_SIZE)
         self.audio.play(name, vol)
 
+    def drop_file(self, path):
+        """窗口被拖入文件：音频 → 加入歌单。返回是否处理。"""
+        if self.music_panel.drop_file(path, self.audio):
+            self.toast(self.audio.pl.status or "已加入歌单")
+            return True
+        return False
+
     def toast(self, text, secs=2.5):
         self.toast_text, self.toast_timer = text, secs
 
@@ -353,7 +366,9 @@ class GameWorld:
         """mouse_pos 是窗口坐标（pygame.mouse.get_pos()）。"""
         mouse_pos = self._L(mouse_pos)
         if self.touch.over_toolbar(mouse_pos): return True
-        if self.quest_rect is not None and self.quest_rect.collidepoint(mouse_pos): return True
+        if any(r.collidepoint(mouse_pos) for r, _ in self.zone_btns): return True
+        if self.mode == "quests" and self.quest_menu.panel_rect.collidepoint(mouse_pos): return True
+        if self.mode == "music" and self.music_panel.panel_rect.collidepoint(mouse_pos): return True
         selected_cols = self.selected_colonists()
         self._place_hud()
         if self.hud.panel_rect.collidepoint(mouse_pos) and selected_cols: return True
@@ -428,6 +443,10 @@ class GameWorld:
         if event.type == pygame.VIDEORESIZE:
             return
 
+        if event.type == getattr(pygame, "DROPFILE", -2):       # 拖入音频文件：任何时候都加入歌单
+            self.drop_file(event.file)
+            return
+
         if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and getattr(event, "pos", None) is not None
                 and (self.menu.active or self.is_mouse_in_ui(event.pos))):
             self.audio.play("click")                        # 点界面的"嗒"声
@@ -460,13 +479,21 @@ class GameWorld:
             return
 
         if event.type == pygame.KEYDOWN:
+            if self.mode == "music" and self.music_panel.handle_key(event, self.audio): return
             if self.bhud.handle_key(event, self.selected_building): return
             self._handle_keydown(event, mouse_pos, screen_w, screen_h)
             return
 
         if event.type == pygame.TEXTINPUT:
+            if self.mode == "music" and self.music_panel.handle_text(event.text): return
             self.bhud.handle_text(event, self.selected_building)
             return
+
+        if self.mode == "music" and lpos is not None and (
+                event.type == getattr(pygame, "MOUSEWHEEL", -1)
+                or (event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5))):
+            dy = getattr(event, "y", 0) if event.type == getattr(pygame, "MOUSEWHEEL", -1) else (1 if event.button == 4 else -1)
+            if self.music_panel.handle_wheel(self._L(self._mouse()), dy): return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             if self.bhud.handle_right_click(lpos, self.selected_building): return
@@ -496,12 +523,6 @@ class GameWorld:
             return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            qr = self.quest_rect
-            if qr is not None and qr.collidepoint(lpos):
-                if lpos[1] < qr.y + 24:
-                    self.show_quests = not self.show_quests          # 点标题栏收起/展开
-                self.left_down_pos = None
-                return
             selected_cols = self.selected_colonists()
             if self.hud.handle_click(lpos, selected_cols):
                 self.left_down_pos = None; return
@@ -555,6 +576,15 @@ class GameWorld:
                     self.build_rotation = 0
                 self.left_down_pos = None
                 return
+            if self._zone_kind() and self._zone_bar_click(lpos):
+                self.left_down_pos = None
+                return
+            if self.mode == "music" and self.music_panel.handle_click(lpos, self.audio):
+                self.left_down_pos = None
+                return
+            if self.mode == "quests" and self.quest_menu.handle_click(lpos):
+                self.left_down_pos = None
+                return
             if self.mode == "research":
                 if self.research_menu.handle_click(lpos, self.research_mgr):
                     self.left_down_pos = None
@@ -577,7 +607,7 @@ class GameWorld:
 
     def wants_text_input(self):
         """当前是否有数字输入框（熔炉/烹饪台/柜子）处于编辑状态：main 据此开关系统文字输入。"""
-        return self.bhud.active_input is not None
+        return self.bhud.active_input is not None or self.music_panel.editing
 
     def edge_scroll(self, mouse_pos, screen_w, screen_h, dt_raw, edge_margin=20):
         """鼠标贴着窗口边缘时滚动视角（纯 UI，用真实时间）。菜单/教程打开时不滚——移动鼠标不会让地图动。"""
@@ -632,7 +662,13 @@ class GameWorld:
         if event.key == pygame.K_h:
             self.show_help = not self.show_help; return
         if event.key == pygame.K_q:
-            self.show_quests = not self.show_quests; return
+            self.mode = "quests" if self.mode != "quests" else None; return
+        if event.key == pygame.K_g:
+            self.mode = "harvest_area" if self.mode != "harvest_area" else None; return
+        if event.key == pygame.K_v:
+            self.mode = "hunt_area" if self.mode != "hunt_area" else None; return
+        if event.key == pygame.K_p:
+            self.mode = "music" if self.mode != "music" else None; return
         if event.key == pygame.K_t:
             self.show_beauty = not self.show_beauty; return
         if event.key == pygame.K_b:
@@ -774,6 +810,71 @@ class GameWorld:
         elif pygame.Rect(screen_w // 2 - 50, screen_h // 2 + 60, 100, 30).collidepoint(pos):
             self.pending_farm_rect = None
 
+    def _shift_down(self):
+        try:
+            return bool(pygame.key.get_mods() & pygame.KMOD_SHIFT) or bool(self.touch_shift)
+        except Exception:
+            return bool(getattr(self, "touch_shift", False))
+
+    def _zone_kind(self):
+        return {"harvest_area": "harvest", "hunt_area": "hunt"}.get(self.mode)
+
+    def _zone_bar_click(self, lpos):
+        """采集/狩猎区模式下顶部的小工具条：划定 / 擦除 / 清空。返回是否吞掉点击。"""
+        for r, bid in self.zone_btns:
+            if r.collidepoint(lpos):
+                if bid == "paint": self.zone_erase = False
+                elif bid == "erase": self.zone_erase = True
+                elif bid == "clear" and self._zone_kind():
+                    self.issue(cmdlib.make("zone_clear", kind=self._zone_kind()))
+                    self.toast("已清空该区域")
+                return True
+        return False
+
+    def _draw_zone_bar(self, surface, lw):
+        self.zone_btns = []
+        kind = self._zone_kind()
+        if kind is None:
+            return
+        name = "采集区" if kind == "harvest" else "狩猎区"
+        labels = [("paint", "划定"), ("erase", "擦除"), ("clear", "清空")]
+        bw, bh, gap = 84, 34, 8
+        total = len(labels) * (bw + gap) + 330
+        x = lw // 2 - total // 2
+        y = 8
+        bar = pygame.Surface((total, bh + 12), pygame.SRCALPHA)
+        bar.fill((20, 20, 28, 210))
+        surface.blit(bar, (x - 6, y - 6))
+        tip = f"{name}：拖动框选{'擦除' if self.zone_erase else '划定'}（Shift=擦除）  共{self.zones.count(kind)}格"
+        surface.blit(self.font.render(tip, True, (230, 230, 200)), (x, y + 8))
+        bx = x + 330
+        for bid, lab in labels:
+            r = pygame.Rect(bx, y, bw, bh)
+            on = (bid == "paint" and not self.zone_erase) or (bid == "erase" and self.zone_erase)
+            pygame.draw.rect(surface, (60, 90, 70) if on else (45, 45, 50), r, border_radius=5)
+            pygame.draw.rect(surface, (160, 220, 160) if on else (110, 110, 120), r, 2, border_radius=5)
+            t = self.font.render(lab, True, (240, 240, 240))
+            surface.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
+            self.zone_btns.append((r, bid))
+            bx += bw + gap
+
+    def _draw_zones(self, surface):
+        vx1, vy1, vx2, vy2 = self.camera.view_tiles()
+        zone_mode = self._zone_kind()
+        for kind, col in (("harvest", (180, 220, 100)), ("hunt", (220, 100, 150))):
+            tiles = self.zones.tiles[kind]
+            if not tiles:
+                continue
+            alpha = 70 if zone_mode == kind else 34
+            s = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+            s.fill((*col, alpha))
+            for (tx, ty) in tiles:
+                if tx < vx1 or tx > vx2 or ty < vy1 or ty > vy2: continue
+                sx, sy = self.camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
+                surface.blit(s, (sx, sy))
+                if zone_mode == kind:
+                    pygame.draw.rect(surface, col, (sx, sy, TILE_SIZE, TILE_SIZE), 1)
+
     def _handle_drag_mode(self, event, screen_w, screen_h):
         if self.pending_farm_rect: return
         bottom_h = self.get_bottom_ui_height()
@@ -802,12 +903,10 @@ class GameWorld:
                                            mat=self.current_build_mat, rot=self.build_rotation, **rect))
                 elif self.mode == "deconstruct":
                     self.issue(cmdlib.make("deconstruct_area", **rect))
-                elif self.mode == "harvest_area":
-                    self.issue(cmdlib.make("harvest_area", **rect))
-                    self.mode = None
-                elif self.mode == "hunt_area":
-                    self.issue(cmdlib.make("hunt_area", **rect))
-                    self.mode = None
+                elif self.mode in ("harvest_area", "hunt_area"):
+                    kind = "harvest" if self.mode == "harvest_area" else "hunt"
+                    erase = self.zone_erase or self._shift_down()
+                    self.issue(cmdlib.make("zone_set", kind=kind, on=0 if erase else 1, **rect))   # 留在模式里，可连续划
             self.drag_start = None
             self.drag_end = None
 
@@ -1076,6 +1175,7 @@ class GameWorld:
         self.game_time.update()
         self.farms.update(dt)
         self.room_mgr.update(dt)
+        self.zones.update(self)
 
         for c in self.colonists:
             c.update_needs(dt, self.game_time)
@@ -1182,6 +1282,7 @@ class GameWorld:
             surface.blit(txt, (sx + TILE_SIZE // 2 - txt.get_width() // 2,
                                sy + TILE_SIZE // 2 - txt.get_height() // 2))
 
+        self._draw_zones(surface)
         self.stockpiles.draw(surface, self.camera)
         self.farms.draw(surface, self.camera)
         self.buildings.draw_layer(surface, self.camera, self.font_small, 0)
@@ -1299,8 +1400,7 @@ class GameWorld:
             y0 += 24
 
         self.log.draw(surface, self.font, screen_w, screen_h)
-        from ui import quest_hud
-        quest_hud.draw(surface, self.font, self)
+        self._draw_zone_bar(surface, screen_w)
 
         if self.mode == "build":
             self.build_menu.draw(surface, screen_w, screen_h, screen_h - self.toolbar.height,
@@ -1308,6 +1408,10 @@ class GameWorld:
                                  self.research_mgr, self.build_rotation)
         elif self.mode == "research":
             self.research_menu.draw(surface, screen_w, screen_h, self.research_mgr)
+        elif self.mode == "quests":
+            self.quest_menu.draw(surface, screen_w, screen_h, self)
+        elif self.mode == "music":
+            self.music_panel.draw(surface, screen_w, screen_h, self.audio)
 
         self.toolbar.draw(surface, screen_w, screen_h, self.mode)
 
@@ -1368,7 +1472,8 @@ class GameWorld:
                 "空格键 : 切换时间流速 (暂停/1x/2x/3x)",
                 "B : 建造菜单   |   F : 划定农业区",
                 "S : 划定库存   |   X : 拆除/删除模式",
-                "R : 建造时旋转 / 开启科技树",
+                "R : 建造时旋转 / 开启科技树   |   G : 采集区   |   V : 狩猎区",
+                "Q : 支线任务面板   |   P : 音乐 / 歌单面板",
                 "H / Esc : 打开/关闭此帮助面板   |   F1 : 新手教程   |   M : 游戏菜单",
                 "F11 : 切换全屏模式",
                 "Ctrl + / Ctrl - : 放大 / 缩小界面（Ctrl 0 复位）",

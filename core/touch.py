@@ -32,6 +32,10 @@ BUTTONS = [
     ("farm", "农业", "key", "K_f"),
     ("stock", "库存", "key", "K_s"),
     ("decon", "拆除", "key", "K_x"),
+    ("gather", "采集", "key", "K_g"),
+    ("huntz", "狩猎", "key", "K_v"),
+    ("quest", "任务", "key", "K_q"),
+    ("music", "音乐", "key", "K_p"),
     ("menu", "菜单", "key", "K_m"),
 ]
 DRAG_MODES = ("stockpile", "farm", "deconstruct", "harvest", "hunt", "build_area", "build")
@@ -101,6 +105,10 @@ class TouchAdapter:
             elif bid == "farm": on = g.mode == "farm"
             elif bid == "stock": on = g.mode == "stockpile"
             elif bid == "decon": on = g.mode == "deconstruct"
+            elif bid == "gather": on = g.mode == "harvest_area"
+            elif bid == "huntz": on = g.mode == "hunt_area"
+            elif bid == "quest": on = g.mode == "quests"
+            elif bid == "music": on = g.mode == "music"
             s = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
             s.fill((70, 130, 90, 215) if on else (30, 34, 44, 200))
             surface.blit(s, r.topleft)
