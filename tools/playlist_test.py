@@ -198,6 +198,7 @@ check("P6 点列表里的歌曲播放", g.audio.now_playing == "a")
 v0 = g.audio.music_vol; click(g, btn(g, "vol", -0.1).center); draw(g)
 check("P6 音量 -", g.audio.music_vol < v0)
 click(g, btn(g, "mute").center); check("P6 静音按钮", g.audio.muted); draw(g)
+sv = g.audio.sfx_vol; click(g, btn(g, "sfxvol", -0.1).center); check("P6 音乐面板里也能调音效音量", g.audio.sfx_vol < sv); draw(g)
 click(g, btn(g, "del", 0).center); draw(g)
 check("P6 点 × 删除正在播的歌：停止且从列表消失", len(g.audio.pl.items) == 1 and g.audio.now_playing is None)
 # 输入框

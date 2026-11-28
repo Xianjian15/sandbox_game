@@ -107,14 +107,17 @@ class MusicPanel:
         surface.blit(self.font.render(f"音乐音量 {int(audio.music_vol * 100)}%", True, (200, 200, 200)), (x + 20, vy + 6))
         button(pygame.Rect(x + 170, vy, 36, 30), "-", "vol", -0.1)
         button(pygame.Rect(x + 212, vy, 36, 30), "+", "vol", 0.1)
-        button(pygame.Rect(x + 262, vy, 70, 30), "取消静音" if audio.muted else "静音", "mute", on=audio.muted)
+        button(pygame.Rect(x + 254, vy, 70, 30), "取消静音" if audio.muted else "静音", "mute", on=audio.muted)
+        surface.blit(self.font.render(f"音效 {int(audio.sfx_vol * 100)}%", True, (200, 200, 200)), (x + 336, vy + 6))
+        button(pygame.Rect(x + 410, vy, 30, 30), "-", "sfxvol", -0.1)
+        button(pygame.Rect(x + 444, vy, 30, 30), "+", "sfxvol", 0.1)
         if pl.mode == "list" and audio.now_playing:
-            np = f"正在播放：{audio.now_playing}" + ("（已暂停）" if audio.paused else "")
+            np = f"♪ {audio.now_playing}" + ("（暂停）" if audio.paused else "")
         elif pl.mode == "list":
             np = "歌单模式：点下面的歌曲开始播放" if n else "歌单是空的：先添加音乐"
         else:
             np = "自动模式：随昼夜与战斗换曲（想听自己的音乐请切到「我的歌单」）"
-        surface.blit(self.font.render(np[:48], True, (150, 220, 170)), (x + 350, vy + 6))
+        surface.blit(self.font.render(np[:46], True, (150, 220, 170)), (x + 230, y + 16))
         # 列表
         ly = y + 132
         lr = pygame.Rect(x + 20, ly, pw - 40, ROWS * ROW_H)
@@ -191,6 +194,8 @@ class MusicPanel:
             else: audio.play_pause()
         elif bid == "vol": audio.set_music_volume(audio.music_vol + data); audio.save()
         elif bid == "mute": audio.set_muted(not audio.muted); audio.save()
+        elif bid == "sfxvol":
+            audio.set_sfx_volume(audio.sfx_vol + data); audio.save(); audio.play("click")
         elif bid == "play":
             if pl.mode != "list": pl.mode = "list"; pl.save()
             audio.play_index(data)

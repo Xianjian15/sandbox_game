@@ -104,6 +104,43 @@ for (w, h) in ((1280, 720), (800, 600), (1920, 1080), (1024, 500)):
     ok = all(r.x >= 0 and r.y >= 0 and r.right <= g.ui_w and r.bottom <= g.ui_h for r in g.menu.rects.values())
     check(f"G6 {w}x{h} 按钮全在画面内", ok, {k: tuple(r) for k, r in g.menu.rects.items() if r.bottom > g.ui_h})
 
+# G8 菜单里直接调音量
+import tempfile
+from core import audio as AU
+class _FM:
+    class music:
+        @staticmethod
+        def set_volume(v): pass
+    def Sound(self, p): raise RuntimeError
+def mk_audio(g):
+    d = tempfile.mkdtemp(); g.audio = AU.AudioManager(os.path.join(d, "audio.json"), mixer=_FM()); return g
+g = mk_audio(mk()); key(g, pygame.K_m); draw(g)
+names = [n for n, _ in ITEMS]
+check("G8a 菜单里有 音乐音量 / 音效音量 / 静音", all(n in names for n in ("music_vol", "sfx_vol", "mute")))
+mv0 = g.audio.music_vol
+click(g, g.menu.rects["music_vol_minus"].center); check("G8b 点音乐「-」降低 5%", abs(g.audio.music_vol - (mv0 - 0.05)) < 1e-6, g.audio.music_vol)
+click(g, g.menu.rects["music_vol_plus"].center); click(g, g.menu.rects["music_vol_plus"].center)
+check("G8c 点音乐「+」两次升高", abs(g.audio.music_vol - (mv0 + 0.05)) < 1e-6, g.audio.music_vol)
+sv0 = g.audio.sfx_vol
+click(g, g.menu.rects["sfx_vol_minus"].center); check("G8d 点音效「-」降低 5%", abs(g.audio.sfx_vol - (sv0 - 0.05)) < 1e-6, g.audio.sfx_vol)
+check("G8e 音效音量变化时放一声 click 给你听", "click" in g.audio.played)
+check("G8f 点按钮后菜单保持打开", g.menu.active and g.app_request is None)
+g.menu.sel = names.index("music_vol"); key(g, pygame.K_LEFT)
+check("G8g 选中音乐行按 ← 降低", abs(g.audio.music_vol - (mv0 + 0.05 - 0.05)) < 1e-6, g.audio.music_vol)
+g.menu.sel = names.index("sfx_vol"); key(g, pygame.K_RIGHT); key(g, pygame.K_RIGHT)
+check("G8h 选中音效行按 → 升高", abs(g.audio.sfx_vol - (sv0 - 0.05 + 0.1)) < 1e-6, g.audio.sfx_vol)
+for _ in range(40): click(g, g.menu.rects["music_vol_plus"].center)
+check("G8i 音量上限 100%", g.audio.music_vol == 1.0)
+for _ in range(40): click(g, g.menu.rects["music_vol_minus"].center)
+check("G8j 音量下限 0%", g.audio.music_vol == 0.0)
+click(g, g.menu.rects["mute"].center); check("G8k 点「静音」开启", g.audio.muted is True and g.menu.active)
+draw(g); click(g, g.menu.rects["mute"].center); check("G8l 再点取消静音", g.audio.muted is False)
+g.menu.sel = names.index("mute"); key(g, pygame.K_RETURN); check("G8m 选中静音行按 Enter 开关", g.audio.muted is True and g.menu.active)
+g.audio.save(); g2 = AU.AudioManager(g.audio.path, mixer=_FM())
+check("G8n 音量/静音改动已存盘（重启保留）", (g2.music_vol, g2.sfx_vol, g2.muted) == (g.audio.music_vol, g.audio.sfx_vol, True))
+g = mk(); key(g, pygame.K_m); draw(g); click(g, g.menu.rects["sfx_vol_plus"].center)
+check("G8o 没接真音频（NullAudio）也不崩", g.menu.active)
+
 # G7
 g = mk(); h0 = world_hash(g)
 key(g, pygame.K_m); draw(g); move(g, (5, 5)); key(g, pygame.K_DOWN); key(g, pygame.K_m)
