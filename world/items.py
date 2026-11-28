@@ -170,9 +170,11 @@ _TEXT_CACHE = {}
 class ItemManager:
     def __init__(self):
         self.stacks = {}
+        self.on_drop = None          # 纯显示回调 (kind, tx, ty)：由 GameWorld 接上发声
 
     def add(self, kind, amount, tx, ty):
         if kind is None or amount <= 0: return
+        if self.on_drop is not None: self.on_drop(kind, tx, ty)      # 纯显示：物体落地的声音
         key = (tx, ty, kind)
         if key in self.stacks:
             self.stacks[key].amount += amount

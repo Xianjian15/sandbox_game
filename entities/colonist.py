@@ -8,12 +8,17 @@ from settings import TILE_SIZE, WHITE, SELECT
 from core.pathfinding import astar
 from core.regen import regen_amount
 from world.buildings import BUILDING_DEFS
-from world.world import T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK, T_METEOR
+from world.world import T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK, T_METEOR, T_DIRT
 from world.items import ITEM_DEFS
 from combat.weapons import get_weapon, WEAPONS, craft_need, EQUIPPABLE
 from combat.weapon_render import draw_weapon
 
 FOOD_KINDS = ("meal_fine", "meal_simple", "food", "meat")   # 能直接吃的东西
+
+# 采集音效（纯显示）：挥一下的声音 / 采完的声音，按资源种类区分
+_HIT_SOUND = {T_TREE: "hit_wood", T_ROCK: "hit_stone", T_IRON_ROCK: "hit_iron", T_METEOR: "hit_meteor", T_BERRY: "pick_berry"}
+_DONE_SOUND = {T_TREE: "done_tree", T_ROCK: "done_stone", T_IRON_ROCK: "done_iron", T_METEOR: "done_iron", T_BERRY: "done_berry"}
+_FLOOR_STEP = {"wood": "wood", "stone": "stone", "iron": "metal", "wool": "carpet"}     # 地板材质 → 脚步声
 
 DEBUG_BUILD = os.environ.get("RW_DEBUG") == "1"  # 调试建造流程：运行前设环境变量 RW_DEBUG=1
 
@@ -39,6 +44,7 @@ class Colonist:
         self.radius = TILE_SIZE // 2 - 4
         self.path, self.selected, self.job = [], False, None
         self.work_progress = 0.0
+        self._step_acc, self._step_n = 0.0, 0         # 脚步声计步（纯显示，不进哈希）
         self.carry_limit, self.carrying = 20, None
         self.satiety, self.rest, self.mood = 100.0, 100.0, 100.0
 
@@ -973,6 +979,7 @@ class Colonist:
             dist = (dx ** 2 + dy ** 2) ** 0.5
             step = self.speed * dt
             if dist > 0.001: self.facing_angle = math.atan2(dy, dx)
+            self._footstep(min(dist, step), world, buildings)
             if dist <= step:
                 self.x, self.y = tgx, tgy
                 self.path.pop(0)
@@ -988,6 +995,20 @@ class Colonist:
             return
         if not self.job and not self.path and self.target_enemy is None and self.target_animal is None and self.queue:
             self._pop_next_command()
+
+    def _footstep(self, moved, world, buildings):
+        """走路的脚步声（纯显示）：每走约 0.9 格一步，按脚下的地面/地板材质换声音。"""
+        self._step_acc += moved
+        if self._step_acc < TILE_SIZE * 0.9:
+            return
+        self._step_acc -= TILE_SIZE * 0.9
+        self._step_n ^= 1
+        tx, ty = self.current_tile()
+        ground = "dirt" if world.get(tx, ty) == T_DIRT else "grass"
+        fl = buildings.buildings.get((tx, ty, 0)) if buildings is not None else None
+        if fl is not None and fl.kind in ("floor", "sterile_floor"):
+            ground = _FLOOR_STEP.get(fl.material, "wood")
+        self.ctx.sound("step_" + ground + ("2" if self._step_n else ""), self.x, self.y)
 
     def _on_arrive(self, world, items, buildings):
         if self.state == "going_to_eat":
@@ -1171,6 +1192,8 @@ class Colonist:
                 dmg = 10
                 tool_def = get_weapon(self.tool_key) if self.tool_key else {"chop_bonus": False, "mine_bonus": False}
                 t = world.get(j["tx"], j["ty"])
+                self.ctx.sound(_HIT_SOUND.get(t, "hit_stone"), j["tx"] * TILE_SIZE + TILE_SIZE / 2,
+                               j["ty"] * TILE_SIZE + TILE_SIZE / 2)
                 if t == T_TREE:
                     wd = self.get_weapon_def()
                     cm = max(2.5 if tool_def.get("chop_bonus") else 1.0,
@@ -1179,6 +1202,8 @@ class Colonist:
                 if t in (T_ROCK, T_IRON_ROCK, T_METEOR) and tool_def.get("mine_bonus"): dmg *= 2.5
                 done, kind, amt = world.damage_resource(j["tx"], j["ty"], int(dmg))
                 if done:
+                    self.ctx.sound(_DONE_SOUND.get(t, "harvest_done"), j["tx"] * TILE_SIZE + TILE_SIZE / 2,
+                                   j["ty"] * TILE_SIZE + TILE_SIZE / 2)
                     if t == T_METEOR and items is not None: items.add("stone", 3, j["tx"], j["ty"])   # 陨石堆：铁矿 + 石头
                     if (j["tx"], j["ty"]) in self.ctx.designated_harvests:
                         self.ctx.designated_harvests.remove((j["tx"], j["ty"]))

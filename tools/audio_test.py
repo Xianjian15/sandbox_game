@@ -183,4 +183,60 @@ def run(audio):
         if _ % 50 == 0: frame(g)
     return world_hash(g)
 check("A5 接音频 / 不接音频，状态哈希完全一致", run(Rec()) == run(A.NullAudio()))
+# A6 采集 / 脚步 / 落地 音效
+from world.world import T_TREE, T_ROCK, T_IRON_ROCK, T_METEOR, T_BERRY, T_GRASS, T_DIRT
+def clean(g, cx, cy):
+    for y in range(cy - 6, cy + 7):
+        for x in range(cx - 6, cx + 12):
+            g.world.tiles[y][x] = T_GRASS; g.world.resource_hp.pop((x, y), None)
+def harvest_sounds(tile, hp=100):
+    g = mk(); g.audio = Rec(); c = g.colonists[0]; c.rest = c.satiety = 100; c.tool_key = "iron_pickaxe"
+    cx, cy = c.current_tile(); clean(g, cx, cy)
+    g.world.tiles[cy][cx + 3] = tile; g.world.resource_hp[(cx + 3, cy)] = hp
+    c.assign_harvest(g.world, cx + 3, cy); g._res_prev = len(g.world.resource_hp)
+    for _ in range(60 * 20): g.sim_step()
+    return names(g)
+for tile, hit, done in ((T_TREE, "hit_wood", "done_tree"), (T_ROCK, "hit_stone", "done_stone"),
+                        (T_IRON_ROCK, "hit_iron", "done_iron"), (T_METEOR, "hit_meteor", "done_iron"),
+                        (T_BERRY, "pick_berry", "done_berry")):
+    ns = harvest_sounds(tile, 60)
+    check(f"A6 采集 {hit.split('_')[-1]} → {hit} 挥击声 + {done} 完成声", hit in ns and done in ns, set(ns))
+    check(f"A6 {done} 取代了通用的 harvest_done", "harvest_done" not in ns, set(ns))
+def steps_on(setup):
+    g = mk(); g.audio = Rec(); c = g.colonists[0]; cx, cy = c.current_tile(); clean(g, cx, cy)
+    setup(g, cx, cy); g.audio.calls.clear()
+    c.path = [(cx + k, cy) for k in range(1, 9)]
+    for _ in range(60 * 6): g.sim_step()
+    return [n for n in names(g) if n.startswith("step_")]
+def floor(mat):
+    def f(g, cx, cy):
+        for x in range(cx, cx + 10):
+            bp = g.buildings.add_blueprint("floor", mat, x, cy); g.buildings.complete_blueprint(bp)
+    return f
+def dirt(g, cx, cy):
+    for x in range(cx, cx + 10): g.world.tiles[cy][x] = T_DIRT
+for label, setup, grp in (("草地", lambda g, a, b: None, "grass"), ("泥地", dirt, "dirt"), ("木地板", floor("wood"), "wood"),
+                          ("石地板", floor("stone"), "stone"), ("铁地板", floor("iron"), "metal"), ("羊毛地毯", floor("wool"), "carpet")):
+    ns = steps_on(setup)
+    check(f"A6 走在{label}上 → step_{grp}（{len(ns)} 步）", len(ns) >= 4 and all(n.startswith("step_" + grp) for n in ns), set(ns))
+ns = steps_on(lambda g, a, b: None)
+check("A6 脚步声两种变体交替", {"step_grass", "step_grass2"} <= set(ns), set(ns))
+g = mk(); g.audio = Rec(); c = g.colonists[0]; g.audio.calls.clear(); cx, cy = c.current_tile()
+for kind, want in (("wood", "drop_wood"), ("stone", "drop_stone"), ("iron_ore", "drop_stone"), ("iron", "drop_metal"),
+                   ("pistol", "drop_metal"), ("meat", "drop_soft"), ("leather", "drop_soft"), ("food", "drop_soft"),
+                   ("meal_fine", "drop_soft"), ("wool", "drop_soft")):
+    g.audio.calls.clear(); g.items.add(kind, 3, cx + 1, cy)
+    check(f"A6 {kind} 落地 → {want}", names(g) == [want], names(g))
+g = mk(); g.audio = Rec(); g.camera.x = g.camera.y = 0; g.audio.calls.clear()
+g.items.add("wood", 1, 150, 110)
+check("A6 很远的落地声被衰减为 0", all(v == 0 for n, v in g.audio.calls), g.audio.calls)
+g = mk(); n_boot = len(Rec().calls)
+g2 = GameWorld(f, f, f, f, W, H, seed=5); g2.audio = Rec()
+check("A6 开局布置物资时不发落地声", g2.audio.calls == [])
+def run6(audio):
+    g = mk(seed=12); g.audio = audio; c = g.colonists[0]; cx, cy = c.current_tile(); clean(g, cx, cy)
+    g.world.tiles[cy][cx + 3] = T_TREE; g.world.resource_hp[(cx + 3, cy)] = 60; c.assign_harvest(g.world, cx + 3, cy)
+    for _ in range(900): g.sim_step()
+    return world_hash(g)
+check("A6 采集/脚步/落地声不影响状态哈希", run6(Rec()) == run6(A.NullAudio()))
 print("FAILS:", FAILS); sys.exit(1 if FAILS else 0)

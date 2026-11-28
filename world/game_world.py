@@ -58,6 +58,8 @@ class GameWorld:
         self.farms = FarmManager()
         from systems.zones import ZoneManager
         self.zones = ZoneManager()                       # 持续采集/狩猎区
+        self._booting = True                             # 开局布置物资时不发落地声
+        self._res_sound_seen = False
         self.buildings = BuildingManager(self.research_mgr)
         self.ctx.buildings = self.buildings
         self.world.buildings = self.buildings
@@ -200,6 +202,9 @@ class GameWorld:
         self.game_speed = 1.0
         self.warning_timer = 0.0
         self.warning_text = ""
+        self.ctx.sfx_hook = self._sound_from_sim         # 模拟里的采集/脚步声（纯显示）
+        self.items.on_drop = self._item_dropped          # 物品落地声（纯显示）
+        self._booting = False
 
     # ---------------- 指令系统 ----------------
     def issue(self, cmd):
@@ -338,6 +343,25 @@ class GameWorld:
         self.ui_pref = pref
         self._update_ui_scale(*self.native_size)
         self.toast_text, self.toast_timer = pref_text(pref), 1.5
+
+    _ITEM_SOUND = {"wood": "drop_wood", "stone": "drop_stone", "iron_ore": "drop_stone",
+                   "iron": "drop_metal", "axe": "drop_metal", "stone_pickaxe": "drop_stone", "iron_pickaxe": "drop_metal",
+                   "stone_axe": "drop_stone", "stone_spear": "drop_wood", "stone_hammer": "drop_stone",
+                   "stone_knife": "drop_stone", "longsword": "drop_metal", "gun": "drop_metal", "club": "drop_wood",
+                   "spear": "drop_wood", "dagger": "drop_metal", "iron_spear": "drop_metal", "machete": "drop_metal",
+                   "war_hammer": "drop_metal", "bow": "drop_wood", "crossbow": "drop_wood", "pistol": "drop_metal",
+                   "rifle": "drop_metal", "shotgun": "drop_metal", "smg": "drop_metal", "sniper": "drop_metal"}
+
+    def _item_dropped(self, kind, tx, ty):
+        """物品落到地上：按材质发出对应的落地声（木=咚咚，石=闷响碎石，金属=当啷，其余软物=噗）。"""
+        if self._booting:
+            return
+        self.sfx(self._ITEM_SOUND.get(kind, "drop_soft"), tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2)
+
+    def _sound_from_sim(self, name, x, y):
+        if name.startswith("done_"):
+            self._res_sound_seen = True
+        self.sfx(name, x, y)
 
     def sfx(self, name, x=None, y=None):
         """播放音效。给了世界坐标 (x, y) 时按离镜头中心的距离减小音量。"""
@@ -1261,8 +1285,9 @@ class GameWorld:
         if nb > self._nb_prev: self.sfx("build_done")
         self._nb_prev = nb
         nr = len(self.world.resource_hp)
-        if nr < self._res_prev: self.sfx("harvest_done")
-        self._res_prev = nr
+        if nr < self._res_prev and not self._res_sound_seen:
+            self.sfx("harvest_done")                 # 没有专属音效的资源被采完（小人采集走 colonist 里的分类音效）
+        self._res_prev, self._res_sound_seen = nr, False
 
     def draw(self, surface, dt_raw):
         screen_w, screen_h = surface.get_size()

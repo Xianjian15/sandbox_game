@@ -14,7 +14,7 @@ import zlib
 # 纯显示/UI 字段，或依赖 libm 的派生量，不参与哈希
 SKIP_ATTRS = {
     "selected", "hit_flash", "recent_shot", "facing_angle", "color", "colors",
-    "rng", "ctx", "radius", "font", "surface", "gender",
+    "rng", "ctx", "radius", "font", "surface", "gender", "_step_acc", "_step_n",
 }
 FLOAT_DIGITS = 4
 

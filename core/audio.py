@@ -14,7 +14,11 @@ from core.app_paths import resource_path
 from core.playlist import Playlist
 
 SFX_NAMES = ("click", "shot_pistol", "shot_rifle", "shot_shotgun", "shot_smg", "shot_sniper", "shot_bow", "melee",
-             "enemy_down", "colonist_down", "build_done", "harvest_done", "quest_new", "quest_done", "alarm", "meteor")
+             "enemy_down", "colonist_down", "build_done", "harvest_done", "quest_new", "quest_done", "alarm", "meteor",
+             "hit_wood", "hit_stone", "hit_iron", "hit_meteor", "pick_berry",
+             "done_tree", "done_stone", "done_iron", "done_berry",
+             "drop_wood", "drop_stone", "drop_metal", "drop_soft") + tuple(
+    f"step_{g}{v}" for g in ("grass", "dirt", "wood", "stone", "metal", "carpet") for v in ("", "2"))
 TRACKS = ("day", "night", "battle")
 _SHOT = {"bow": "shot_bow", "crossbow": "shot_bow", "pistol": "shot_pistol", "rifle": "shot_rifle", "gun": "shot_rifle",
          "shotgun": "shot_shotgun", "smg": "shot_smg", "sniper": "shot_sniper"}

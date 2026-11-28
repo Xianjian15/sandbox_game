@@ -23,6 +23,12 @@ class SimContext:
         # 原 Colonist 的类级集合
         self.reserved_harvests = set()      # 已被某个小人占用的采集格
         self.designated_harvests = set()    # 玩家框选的指定采集区
+        self.sfx_hook = None                # 纯显示：GameWorld 接上后，模拟里发生的事可以发声（不进哈希、不影响模拟）
+
+    def sound(self, name, x, y):
+        """在世界坐标 (x, y) 发声。没接音频（测试/联机无头）时什么都不做。"""
+        if self.sfx_hook is not None:
+            self.sfx_hook(name, x, y)
 
     def next_id(self):
         """全局唯一实体 id：小人、敌人、动物共用一个命名空间，

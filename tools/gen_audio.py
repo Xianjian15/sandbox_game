@@ -106,6 +106,89 @@ def sfx():
     rumble = lowpass(noise(n), 0.015) * (np.minimum(1, t * 3) * np.exp(-t * 1.4))
     boom = sine(55 * np.exp(-t * 0.8), t) * np.exp(-t * 2.2)
     S["meteor"] = norm(rumble * 1.6 + boom, 0.9)
+
+    # ---- 采集 / 脚步 / 落地 音效 ----
+    def hp(x, a): return x - lowpass(x, a)
+
+    def thock(f, dur, body=1.0, bright=0.0):
+        n = int(dur * SR); t = t_(dur)
+        x = sine(f * (1 + 0.25 * np.exp(-t * 40)), t) * env_exp(n, 9) * body
+        x = x + lowpass(noise(n), 0.25) * env_exp(n, 20) * 0.7
+        if bright: x = x + hp(noise(n), 0.3) * env_exp(n, 40) * bright
+        return x
+
+    def ring(f, dur, amp=1.0):
+        t = t_(dur); n = len(t)
+        return amp * (sine(f, t) * np.exp(-t * 14) + 0.6 * sine(f * 2.32, t) * np.exp(-t * 20)
+                      + 0.4 * sine(f * 4.1, t) * np.exp(-t * 30) + 0.5 * hp(noise(n), 0.4) * np.exp(-t * 60))
+
+    def place(o, start, x, g=1.0):
+        i = int(start * SR); j = min(len(o), i + len(x))
+        if i < len(o): o[i:j] += x[:j - i] * g
+
+    S["hit_wood"] = norm(thock(210, 0.14, 1.0, 0.25), 0.7)
+    n = int(0.12 * SR); t = t_(0.12)
+    S["hit_stone"] = norm(hp(noise(n), 0.25) * env_exp(n, 30) + sine(1700, t) * env_exp(n, 26) * 0.5 + sine(820, t) * env_exp(n, 18) * 0.4, 0.7)
+    S["hit_iron"] = norm(ring(1500, 0.3), 0.75)
+    o = np.zeros(int(0.38 * SR)); place(o, 0, ring(760, 0.38, 1.0)); place(o, 0, thock(90, 0.2, 0.8))
+    S["hit_meteor"] = norm(o, 0.8)
+    o = np.zeros(int(0.3 * SR))
+    for k, pos in enumerate((0.0, 0.1, 0.19)):
+        nn = int(0.07 * SR); place(o, pos, lowpass(noise(nn), 0.6) * env_exp(nn, 8) * (0.9 - 0.2 * k))
+    place(o, 0.2, sine(900, t_(0.04)) * env_exp(int(0.04 * SR), 14), 0.25)
+    S["pick_berry"] = norm(o, 0.5)
+
+    o = np.zeros(int(0.9 * SR))
+    nn = int(0.06 * SR); place(o, 0.0, hp(noise(nn), 0.3) * env_exp(nn, 12) + thock(260, 0.06, 0.7))
+    nn = int(0.5 * SR); tt = t_(0.5)
+    place(o, 0.08, lowpass(noise(nn), 0.08) * np.sin(np.pi * np.minimum(1, tt / 0.5)) ** 1.5 * 0.8)
+    place(o, 0.36, thock(65, 0.45, 1.6))
+    S["done_tree"] = norm(o, 0.85)
+    o = np.zeros(int(0.7 * SR))
+    for pos, a in ((0, 1.0), (0.07, 0.8), (0.14, 0.7), (0.23, 0.55), (0.31, 0.4), (0.4, 0.3)):
+        nn = int(0.09 * SR); tt = t_(0.09)
+        place(o, pos, (hp(noise(nn), 0.2) * env_exp(nn, 22) + sine(600 + 700 * rng.rand(), tt) * env_exp(nn, 20) * 0.5), a)
+    place(o, 0.0, thock(110, 0.25, 1.0))
+    S["done_stone"] = norm(o, 0.8)
+    o = np.zeros(int(0.9 * SR)); place(o, 0.0, ring(1300, 0.45, 1.1))
+    for pos, a in ((0.1, 0.6), (0.2, 0.5), (0.3, 0.35)):
+        nn = int(0.08 * SR); place(o, pos, hp(noise(nn), 0.2) * env_exp(nn, 24), a)
+    S["done_iron"] = norm(o, 0.8)
+    o = np.zeros(int(0.5 * SR))
+    for pos in (0, 0.07, 0.14, 0.22):
+        nn = int(0.08 * SR); place(o, pos, lowpass(noise(nn), 0.5) * env_exp(nn, 8), 0.8)
+    place(o, 0.28, sine(780, t_(0.05)) * env_exp(int(0.05 * SR), 12), 0.3); place(o, 0.34, sine(980, t_(0.05)) * env_exp(int(0.05 * SR), 12), 0.25)
+    S["done_berry"] = norm(o, 0.5)
+
+    # 脚步：很轻，每步两种变体（名字带 2）
+    def step_grass():
+        n = int(0.09 * SR); return lowpass(noise(n), 0.12) * np.sin(np.pi * np.linspace(0, 1, n)) ** 1.2
+    def step_dirt():
+        n = int(0.08 * SR); return thock(120, 0.08, 0.9) + lowpass(noise(n), 0.3) * env_exp(n, 10) * 0.5
+    def step_wood():
+        return thock(170, 0.09, 1.0, 0.1)
+    def step_stone():
+        n = int(0.07 * SR); t = t_(0.07)
+        return hp(noise(n), 0.25) * env_exp(n, 35) * 0.8 + sine(520, t) * env_exp(n, 30) * 0.5
+    def step_metal():
+        return ring(1100, 0.12, 0.8)
+    def step_carpet():
+        n = int(0.08 * SR); return lowpass(noise(n), 0.06) * env_exp(n, 9) * 0.8 + sine(80, t_(0.08)) * env_exp(n, 9) * 0.4
+    for name, fn, peak in (("grass", step_grass, 0.28), ("dirt", step_dirt, 0.32), ("wood", step_wood, 0.34),
+                           ("stone", step_stone, 0.32), ("metal", step_metal, 0.3), ("carpet", step_carpet, 0.22)):
+        S["step_" + name] = norm(fn(), peak); S["step_" + name + "2"] = norm(fn(), peak * 0.9)
+
+    # 物体落地：木头 = 两下"咚咚"，石头 = 闷响 + 碎石，金属 = 当啷，软物（肉/皮/布/食物）= 一声闷"噗"
+    o = np.zeros(int(0.35 * SR)); place(o, 0.0, thock(150, 0.14, 1.2, 0.2)); place(o, 0.11, thock(190, 0.1, 0.9), 0.5)
+    place(o, 0.19, thock(220, 0.08, 0.7), 0.25); S["drop_wood"] = norm(o, 0.6)
+    o = np.zeros(int(0.4 * SR)); place(o, 0.0, thock(95, 0.2, 1.4, 0.3))
+    for pos, a in ((0.08, 0.5), (0.14, 0.4), (0.2, 0.3)):
+        nn = int(0.06 * SR); place(o, pos, hp(noise(nn), 0.2) * env_exp(nn, 24), a)
+    S["drop_stone"] = norm(o, 0.65)
+    o = np.zeros(int(0.6 * SR)); place(o, 0.0, ring(950, 0.4, 1.0)); place(o, 0.13, ring(1200, 0.3, 0.5)); place(o, 0.23, ring(1500, 0.2, 0.25))
+    S["drop_metal"] = norm(o, 0.6)
+    n = int(0.16 * SR); t = t_(0.16)
+    S["drop_soft"] = norm(lowpass(noise(n), 0.1) * env_exp(n, 14) + sine(85 * np.exp(-t * 8), t) * env_exp(n, 10), 0.5)
     return S
 
 
@@ -234,11 +317,17 @@ def battle_builder(L, R, r, beat, bars):
 
 
 def main():
+    """python -m tools.gen_audio        重新生成全部（音效 + 音乐）
+    python -m tools.gen_audio sfx    只重新生成音效（音乐不动，不需要 ffmpeg）"""
+    only_sfx = len(sys.argv) > 1 and sys.argv[1] == "sfx"
     os.makedirs(OUT, exist_ok=True)
-    for f in os.listdir(OUT):
-        if f.endswith((".wav", ".ogg")): os.remove(os.path.join(OUT, f))
     s = sfx()
+    for f in os.listdir(OUT):
+        if f.endswith(".wav") and f[:-4] in s: os.remove(os.path.join(OUT, f))
+        elif not only_sfx and f.endswith((".wav", ".ogg")) and f.startswith("music_"): os.remove(os.path.join(OUT, f))
     for k, v in s.items(): save_wav(k, v)
+    if only_sfx:
+        print(f"已重新生成 {len(s)} 个音效 → {OUT}"); return
     make_loop(day_builder, 16, 76, "music_day", 1)
     make_loop(night_builder, 12, 56, "music_night", 2)
     make_loop(battle_builder, 16, 118, "music_battle", 3)

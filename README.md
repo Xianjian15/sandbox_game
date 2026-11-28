@@ -211,3 +211,10 @@ Linux `~/.local/share/SandboxGame/`（`crash.log`、`game.log`、`desync_report.
   - 「打开音乐文件夹」：直接把音乐放进 `用户数据目录/music/`，点「刷新」即可。歌单与模式存在 `playlist.json`，下次启动按上次的模式接着放。
   - 坏文件/不支持的编码自动跳到下一首；全部不能播放也不会死循环。
 - 触屏模式工具栏新增 采集 / 狩猎 / 任务 / 音乐 四个按钮。
+
+
+## v0.15.1 采集 / 脚步 / 落地音效
+- **采集音效**：每挥一下按资源种类发声——树 `hit_wood`、石头 `hit_stone`、铁矿 `hit_iron`、陨石 `hit_meteor`、浆果 `pick_berry`；采完时分别是 `done_tree`（断裂 + 倒下 + 闷响）、`done_stone`（碎石）、`done_iron`（当啷 + 碎石，陨石同）、`done_berry`。没有专属音效的资源仍用通用 `harvest_done`。
+- **脚步声**：小人每走约 0.9 格一步，按脚下材质：草地 / 泥地 / 木地板 / 石地板 / 铁地板（含无菌地面）/ 羊毛地毯，共 6 种，每种两个变体交替；很轻，且随离镜头距离衰减。
+- **落地声**：物品落到地上（采集掉落、动物掉落、小人放下搬运物、制作产出…）按材质发声——木头类 `drop_wood`、石头/铁矿 `drop_stone`、铁和金属武器 `drop_metal`、其余（肉、皮革、羊毛、食物、药品…）`drop_soft`。开局布置物资时不发声。
+- 全部为纯显示：通过 `ctx.sound` / `items.on_drop` 回调发声，不进状态哈希，无音频时什么都不做。新音效仍由 `python -m tools.gen_audio` 合成；新增 `python -m tools.gen_audio sfx` 只重生成音效（不动音乐、不需要 ffmpeg）。
