@@ -1,6 +1,7 @@
 # combat/weapon_render.py
 import math
 import pygame
+from core import textures
 
 
 def draw_gun(surface, cx, cy, angle_rad, weapon_def, scale=1.0):
@@ -50,6 +51,15 @@ def draw_weapon(surface, cx, cy, angle_rad, weapon_def, scale=1.0):
     name = weapon_def.get("name")
     if name == "拳头":
         return
+
+    key = weapon_def.get("key")
+    if key is not None:
+        img = textures.weapon(key, angle_rad)
+        if img is not None:                                 # 有贴图：放在手前方，按朝向旋转
+            dist = 15 * scale
+            surface.blit(img, (int(cx + math.cos(angle_rad) * dist - img.get_width() / 2),
+                               int(cy + math.sin(angle_rad) * dist - img.get_height() / 2)))
+            return
 
     # 有 draw 字典的走原版绘制（步枪、手枪将来如果想画精美点，可以补 draw 字典）
     if weapon_def.get("draw") is not None:

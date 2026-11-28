@@ -14,7 +14,7 @@ import zlib
 # 纯显示/UI 字段，或依赖 libm 的派生量，不参与哈希
 SKIP_ATTRS = {
     "selected", "hit_flash", "recent_shot", "facing_angle", "color", "colors",
-    "rng", "ctx", "radius", "font", "surface",
+    "rng", "ctx", "radius", "font", "surface", "gender",
 }
 FLOAT_DIGITS = 4
 
@@ -53,7 +53,9 @@ def _digest(x):
 def world_sections(g):
     s = {}
     s["time"] = _digest((g.game_time.tick, g.turn, canon(g.game_speed),
-                         canon(g.animal_respawn_timer), canon(g.enemy_invasion_timer), g.waves_spawned))
+                         canon(g.animal_respawn_timer), canon(g.enemy_invasion_timer), g.waves_spawned,
+                         canon(g.meteor_timer), g.meteors_spawned, canon(g.herd_timer), g.herds_spawned))
+    s["quests"] = _digest(g.quests.snapshot())
     s["ctx"] = _digest(g.ctx.snapshot())
     s["colonists"] = _digest([obj_state(c) for c in sorted(g.colonists, key=lambda e: e.id)])
     s["enemies"] = _digest([obj_state(e) for e in sorted(g.enemies, key=lambda e: e.id)])
@@ -67,7 +69,7 @@ def world_sections(g):
     s["stockpiles"] = _digest([(sp.x1, sp.y1, sp.x2, sp.y2, sp.priority) for sp in g.stockpiles.stockpiles])
     s["research"] = _digest((sorted(g.research_mgr.completed), g.research_mgr.current_research,
                              canon(g.research_mgr.progress)))
-    s["terrain"] = _digest((zlib.crc32(repr(g.world.tiles).encode()), sorted(g.world.resource_hp.items())))
+    s["terrain"] = _digest((zlib.crc32(b"".join(bytes(r) for r in g.world.tiles)), sorted(g.world.resource_hp.items())))
     return s
 
 

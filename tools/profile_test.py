@@ -69,8 +69,8 @@ def p2_data():
     check("坏头像被拒", P.decode_avatar("!!!") is None and P.decode_avatar(P.encode_avatar(raw[:-3])) is None
           and P.decode_avatar("A" * 100000) is None and P.decode_avatar(5) is None)
     w = P.clean_wire({"name": "x" * 99, "av": "bad"}, "玩家2")
-    check("clean_wire 清洗", w == {"name": "x" * P.NAME_MAX, "av": None}, w)
-    check("clean_wire 对非 dict 安全", P.clean_wire(None, "a") == {"name": "a", "av": None} and P.clean_wire("zz", "b")["name"] == "b")
+    check("clean_wire 清洗", w == {"name": "x" * P.NAME_MAX, "av": None, "g": "m"}, w)
+    check("clean_wire 对非 dict 安全", P.clean_wire(None, "a") == {"name": "a", "av": None, "g": "m"} and P.clean_wire("zz", "b")["name"] == "b")
     d = tempfile.mkdtemp()
     path = os.path.join(d, "sub", "profile.json")
     pr = P.Profile("阿强", raw, path)

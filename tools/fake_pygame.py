@@ -80,7 +80,7 @@ class Surface:
         r = Rect(0, 0, *self.size)
         for k, v in kw.items(): setattr(r, k, v)
         return r
-    def fill(self, c, *a): self.fills.append(c)
+    def fill(self, c, *a, **k): self.fills.append(c)
     def blit(self, src, pos, *a): self.blits.append((src, pos))
     def set_alpha(self, v): pass
     def set_clip(self, r=None): self._clip = r
@@ -118,13 +118,13 @@ class _Noop(types.ModuleType):
         return lambda *a, **k: None
 
 
-def install():
+def install(textures=False):
     pg = types.ModuleType("pygame")
     pg.Rect, pg.Surface, pg.Color = Rect, Surface, lambda *a: a
     pg.error = type("error", (Exception,), {})
     pg.SRCALPHA, pg.RESIZABLE, pg.FULLSCREEN = 0x10000, 0x10, 0x80000000
     names = ["QUIT", "KEYDOWN", "KEYUP", "MOUSEBUTTONDOWN", "MOUSEBUTTONUP", "MOUSEMOTION", "VIDEORESIZE",
-             "TEXTINPUT", "DROPFILE", "TEXTEDITING"]
+             "TEXTINPUT", "DROPFILE", "TEXTEDITING", "FINGERDOWN", "FINGERUP", "FINGERMOTION"]
     for i, n in enumerate(names):
         setattr(pg, n, 100 + i)
     keys = "ESCAPE RETURN KP_ENTER BACKSPACE UP DOWN SPACE EQUALS PLUS MINUS KP_PLUS KP_MINUS KP_0 TAB F10 F11 LEFT RIGHT DELETE".split()
@@ -143,7 +143,14 @@ def install():
                                        set_caption=lambda *a: None, set_icon=lambda *a: None)
     pg.draw = _Noop("pygame.draw")
     pg.font = types.SimpleNamespace(Font=Font, match_font=lambda *a, **k: None, init=lambda: None)
-    pg.image = types.SimpleNamespace(load=lambda p: (_ for _ in ()).throw(pg.error("no image")),
+    def _load(p):
+        if not textures:
+            raise pg.error("no image")
+        from PIL import Image                      # 只读尺寸：让“贴图路径”也能在无窗口环境下跑一遍
+        s_ = Surface(Image.open(p).size); s_.path = p
+        return s_
+    pg.BLEND_RGBA_MULT = 8
+    pg.image = types.SimpleNamespace(load=_load,
                                      tobytes=lambda s, f: b"", frombytes=lambda b, size, f: Surface(size))
 
     def smoothscale(src, size, dest=None):
@@ -155,6 +162,9 @@ def install():
     def scale(src, size, dest=None):
         Surface.LOG.append(("scale", src.get_size(), tuple(size)))
         return dest if dest is not None else Surface(size)
-    pg.transform = types.SimpleNamespace(smoothscale=smoothscale, scale=scale)
+    pg.transform = types.SimpleNamespace(
+        smoothscale=smoothscale, scale=scale,
+        rotate=lambda src, ang: Surface((src.get_width() + 2, src.get_height() + 2)),
+        flip=lambda src, fx, fy: Surface(src.get_size()))
     sys.modules["pygame"] = pg
     return pg

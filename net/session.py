@@ -32,7 +32,7 @@ from core.version import GAME_VERSION
 from net.framing import FrameBuffer, ProtocolError, pack
 
 PROTO = 3
-MAX_PLAYERS = 4               # 房间最多几人（含房主）；小人归属色也只准备了 4 种
+MAX_PLAYERS = 6               # 房间最多几人（含房主）；小人归属色（core/profile.py PLAYER_COLORS）要有同样多种
 DEFAULT_PORT = 47777
 HASH_INTERVAL = 60            # 每 60 个回合比对一次状态哈希
 STALL_WARN = 0.5              # 等对方超过这么多秒，界面提示"等待对方"
@@ -199,11 +199,11 @@ class LockstepSession:
         return self.lobby_n
 
     def lobby_roster(self):
-        """大厅里当前的名单（按加入顺序，房主第一；重名已加序号）。每项 {"name","av"}。"""
+        """大厅里当前的名单（按加入顺序，房主第一；重名已加序号）。每项 {"name","av","g"}（g：m/f 性别，只影响外观）。"""
         if self.role == "host":
             raw = [self.my_profile] + [c.profile for c in self.conns if c.state == "lobby"]
             names = dedupe_names([r["name"] for r in raw])
-            return [{"name": n, "av": r["av"]} for n, r in zip(names, raw)]
+            return [{"name": n, "av": r["av"], "g": r.get("g", "m")} for n, r in zip(names, raw)]
         return self._lobby_roster
 
     def _lobby_index(self, conn):

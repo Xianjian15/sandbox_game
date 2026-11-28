@@ -66,6 +66,11 @@ def _click_world(g, wx, wy, shift=False):
     g._handle_right_click((sx, sy), shift)
 
 
+def _clear_animals_near(g, tx, ty):
+    """点地上物品前把附近的动物移走（动物比物品优先被点中，会变成狩猎指令）。"""
+    g.animals[:] = [a for a in g.animals if abs(a.current_tile()[0] - tx) > 3 or abs(a.current_tile()[1] - ty) > 3]
+
+
 def _click_tile(g, tx, ty, shift=False):
     _click_world(g, tx * TILE_SIZE + TILE_SIZE // 2, ty * TILE_SIZE + TILE_SIZE // 2, shift)
 
@@ -91,7 +96,12 @@ def op_research_menu(g, s):
 
 
 def op_craft_add(g, s):
-    h = _bhud_prepare(g, s["workbench"]); h.btn_rects = {"craft_stone_pick": R(0, 0, 50, 50)}
+    h = _bhud_prepare(g, s["workbench"]); h.btn_rects = {"craft:stone_pickaxe": R(0, 0, 50, 50)}
+    h.handle_click((5, 5), s["workbench"], g.get_global_items(), g.research_mgr)
+
+
+def op_station_mode(g, s):
+    h = _bhud_prepare(g, s["workbench"]); h.btn_rects = {"toggle_team": R(0, 0, 50, 50)}
     h.handle_click((5, 5), s["workbench"], g.get_global_items(), g.research_mgr)
 
 
@@ -217,11 +227,11 @@ def op_move(g, s, shift):
 # 每个操作 = (tick, 玩家, 函数)。玩家 0/1 只在"双端模拟"里决定谁来执行；回放测试里由 A 全部执行。
 OPS = [
     (10, 0, op_research_menu), (60, 0, lambda g, s: _click_bld(g, s["research"])),
-    (300, 0, op_craft_add), (320, 0, lambda g, s: _click_bld(g, s["workbench"])),
+    (300, 0, op_craft_add), (310, 0, op_station_mode), (320, 0, lambda g, s: _click_bld(g, s["workbench"])),
     (700, 1, op_cook_set), (720, 1, lambda g, s: _click_bld(g, s["stove"])),
     (1100, 1, op_smelt_set), (1120, 1, lambda g, s: _click_bld(g, s["furnace"])),
     (1500, 0, op_toggle_haul), (1520, 0, lambda g, s: _click_tile(g, *s["iron_tile"])),
-    (1900, 1, lambda g, s: _click_tile(g, *s["pick_tile"])),
+    (1900, 1, lambda g, s: (_clear_animals_near(g, *s["pick_tile"]), _click_tile(g, *s["pick_tile"]))),
     (2300, 0, lambda g, s: op_tree(g, s, False)), (2310, 0, lambda g, s: op_tree(g, s, True)),
     (2700, 1, lambda g, s: op_move(g, s, False)), (2720, 1, lambda g, s: op_move(g, s, True)),
     (3000, 0, op_area_cmds_1), (3050, 1, op_hunt),

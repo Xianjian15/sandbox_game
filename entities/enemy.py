@@ -1,6 +1,7 @@
 # entities/enemy.py
 import pygame
 import math
+from core import textures
 from settings import TILE_SIZE, WHITE
 from core.pathfinding import astar
 from world.buildings import BUILDING_DEFS
@@ -162,9 +163,15 @@ class Enemy:
         if self.hp <= 0: return
         sx, sy = camera.world_to_screen(self.x, self.y)
         draw_weapon(surface, sx, sy, self.facing_angle, get_weapon(self.weapon_key), 1.0)
-        pygame.draw.circle(surface, (255, 100, 100) if self.hit_flash > 0 else (200, 50, 50), (int(sx), int(sy)),
-                           self.radius)
-        pygame.draw.circle(surface, (0, 0, 0), (int(sx), int(sy)), self.radius, 2)
+        pimg = textures.person(f"enemy_{'female' if self.id % 2 else 'male'}_body",
+                               f"enemy_{'female' if self.id % 2 else 'male'}_head_0",
+                               None, self.hit_flash > 0, self.facing_angle)
+        if pimg is not None:
+            surface.blit(pimg, (int(sx - pimg.get_width() / 2), int(sy - pimg.get_height() / 2)))
+        else:
+            pygame.draw.circle(surface, (255, 100, 100) if self.hit_flash > 0 else (200, 50, 50), (int(sx), int(sy)),
+                               self.radius)
+            pygame.draw.circle(surface, (0, 0, 0), (int(sx), int(sy)), self.radius, 2)
         pygame.draw.rect(surface, (60, 0, 0), (int(sx - self.radius), int(sy - self.radius - 10), self.radius * 2, 4))
         pygame.draw.rect(surface, (220, 60, 60), (int(sx - self.radius), int(sy - self.radius - 10),
                                                   int((self.radius * 2) * (self.hp / self.max_hp)), 4))

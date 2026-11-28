@@ -9,7 +9,7 @@
   主菜单 ─ 单人游戏 ───────────────────────────────→ 开始单机
          └ 多人游戏 → 联机大厅（房间列表，自动搜索）
                         ├ 点击某个房间 → 加入 → 开始联机
-                        └ 创建房间 → 输入房间名 → 房间大厅（持续广播，最多 4 人；房主点「开始游戏」）→ 开始联机
+                        └ 创建房间 → 输入房间名 → 房间大厅（持续广播，最多 6 人；房主点「开始游戏」）→ 开始联机
                        加入房间后同样停在大厅，等房主开始
 """
 import os
@@ -19,7 +19,7 @@ import time
 from net.discovery import RoomBeacon, RoomFinder, DISC_PORT
 from net.session import LockstepSession, DEFAULT_PORT, PROTO, MAX_PLAYERS, get_lan_ip
 from core.version import GAME_VERSION, DISPLAY_NAME
-from core.profile import Profile, sanitize_name, decode_avatar, PLAYER_COLORS, NAME_MAX as PNAME_MAX
+from core.profile import Profile, sanitize_name, decode_avatar, PLAYER_COLORS, NAME_MAX as PNAME_MAX, GENDER_NAMES
 
 
 def _default_picker():
@@ -74,6 +74,7 @@ class MenuModel:
         self.avatar_picker = cfg.get("avatar_picker") or _default_picker     # 可注入（测试用）
         self.avatar_loader = cfg.get("avatar_loader") or _default_loader
         self.edit_avatar = None                                      # 资料页里"尚未保存"的头像
+        self.edit_gender = self.profile.gender
         self.profile_msg = ""
         self._raw_cache = {}
         self.screen = "main"
@@ -112,6 +113,7 @@ class MenuModel:
         elif screen == "profile":
             self.text = self.profile.name
             self.edit_avatar = self.profile.avatar
+            self.edit_gender = self.profile.gender
             self.profile_msg = ""
 
     def _open_finder(self):
@@ -168,7 +170,8 @@ class MenuModel:
             button("单人游戏", h // 2 - 70, "single")
             button("多人游戏", h // 2 + 2, "multi")
             button("新手教程", h // 2 + 74, "tutorial")
-            button("退出", h // 2 + 146, "quit")
+            button(f"角色设置（{GENDER_NAMES[self.profile.gender]}）", h // 2 + 146, "profile_main")
+            button("退出", h // 2 + 218, "quit")
 
         elif self.screen == "lobby":
             label("多人游戏 · 局域网房间", 60, big=True)
@@ -233,7 +236,7 @@ class MenuModel:
                 button("取消", h // 2 + 10, "cancel_join")
 
         elif self.screen == "profile":
-            top = max(20, h // 2 - 250)
+            top = max(10, h // 2 - 290)
             label("个人资料", top, big=True)
             label(f"用户名（最多 {PNAME_MAX} 个字）：", top + 60, color="dim")
             ws.append(Widget("input", cx - 200, top + 90, 400, 52, self.text, None, True, PNAME_MAX))
@@ -241,11 +244,16 @@ class MenuModel:
                              (self.edit_avatar, self.text or self.profile.name, None)))
             button("选择头像…", top + 285, "pick_avatar", bw=240, x=cx - 260)
             button("清除头像", top + 285, "clear_avatar", bw=240, x=cx + 20)
-            label("也可以把图片文件直接拖进这个窗口（png / jpg / bmp / gif）", top + 350, color="dim")
+            label("角色性别（决定你的小人的外观）：", top + 350, color="dim")
+            for g, x in (("male", cx - 260), ("female", cx + 20)):
+                sel_ = (self.edit_gender == g)
+                button(("● " if sel_ else "○ ") + GENDER_NAMES[g] + ("（已选）" if sel_ else ""), top + 378,
+                       "gender_" + g, bw=240, x=x)
+            label("也可以把图片文件直接拖进这个窗口（png / jpg / bmp / gif）", top + 440, color="dim")
             if self.profile_msg:
-                label(self.profile_msg, top + 380, color="bad")
-            button("保存", top + 425, "save_profile", bw=240, x=cx - 260)
-            button("取消", top + 425, "cancel_profile", bw=240, x=cx + 20)
+                label(self.profile_msg, top + 468, color="bad")
+            button("保存", top + 500, "save_profile", bw=240, x=cx - 260)
+            button("取消", top + 500, "cancel_profile", bw=240, x=cx + 20)
 
         elif self.screen == "message":
             for i, line in enumerate(self.message):
@@ -371,8 +379,11 @@ class MenuModel:
             self.go("lobby")
         elif action == "confirm_create":
             self._create_room()
-        elif action == "profile":
+        elif action in ("profile", "profile_main"):
+            self.profile_from = "main" if action == "profile_main" else "lobby"
             self.go("profile")
+        elif action in ("gender_male", "gender_female"):
+            self.edit_gender = action[len("gender_"):]
         elif action == "pick_avatar":
             try:
                 path = self.avatar_picker()
@@ -387,10 +398,11 @@ class MenuModel:
         elif action == "save_profile":
             self.profile.name = sanitize_name(self.text, self.profile.name)
             self.profile.avatar = self.edit_avatar
+            self.profile.gender = self.edit_gender
             self.profile.save()
-            self.go("lobby")
+            self.go(getattr(self, "profile_from", "lobby"))
         elif action == "cancel_profile":
-            self.go("lobby")
+            self.go(getattr(self, "profile_from", "lobby"))
         elif action == "start_host":
             if self.session is not None:
                 self.session.start_game()

@@ -3,7 +3,7 @@
 
 打开时 GameWorld 会吞掉所有输入、main 会停掉边缘滚屏——移动鼠标不会让地图动。
 点按钮或用 ↑↓ + Enter 选择；M / Esc 关闭。
-动作：resume 继续 / tutorial 教程 / help 快捷键速查 / ui_minus、ui_plus 界面大小 / fullscreen / menu 返回主菜单 / quit 退出。
+动作：resume 继续 / tutorial 教程 / help 快捷键速查 / input 切换 电脑·触屏 操作模式 / ui_minus、ui_plus 界面大小 / fullscreen / menu 返回主菜单 / quit 退出。
 resume/tutorial/help 由 GameWorld 自己处理，其余通过 game.app_request 交给 main（只有 main 能改窗口、退出）。
 """
 ITEMS = [
@@ -11,6 +11,7 @@ ITEMS = [
     ("tutorial", "新手教程  (F1)"),
     ("help", "快捷键速查  (H)"),
     ("ui", "界面大小"),                 # 特殊行：中间显示百分比，左右两个小按钮
+    ("input", "操作模式"),               # 点一下在 电脑 / 触屏 之间切换（文字里显示当前模式）
     ("fullscreen", "全屏 / 窗口  (F11)"),
     ("menu", "返回主菜单  (F10)"),
     ("quit", "退出游戏"),
@@ -25,6 +26,7 @@ class GameMenu:
         self.sel = 0
         self.rects = {}            # 名称 -> Rect（逻辑坐标，绘制时更新）
         self.ui_pref_text = ""
+        self.input_text = "电脑"
 
     def open(self):
         self.active = True
@@ -111,6 +113,7 @@ class GameMenu:
                     st = font.render(sym, True, (235, 235, 240))
                     surface.blit(st, (br.centerx - st.get_width() // 2, br.centery - st.get_height() // 2))
             else:
+                if name == "input": label = f"操作模式：{self.input_text}（点击切换）"
                 lt = font.render(label, True, (255, 200, 200) if danger else (235, 235, 240))
                 surface.blit(lt, (r.centerx - lt.get_width() // 2, r.centery - lt.get_height() // 2))
             ry += row_h + gap

@@ -111,6 +111,18 @@ class RoomManager:
                     score += 2
                 elif b.material == "stone":
                     score += 5
+                elif b.material == "iron":
+                    score += 4
+                elif b.material == "wool":
+                    score += 8              # 地毯
+            elif b and b.kind == "flower_pot":
+                score += 12
+            elif b and b.kind == "bookshelf":
+                score += 6
+            elif b and b.kind == "fountain":
+                score += 20
+            elif b and b.kind == "statue":
+                score += 30
             elif b and b.kind == "sterile_floor":
                 score += 10  # 无菌地板提供极高的美观度
         return int(score / max(1, len(tiles)) * 10) if tiles else 0

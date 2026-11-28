@@ -1,23 +1,31 @@
 # world/buildings.py
 import pygame
 from settings import TILE_SIZE
+from core import textures
 from world.world import T_TREE, T_ROCK, T_IRON_ROCK, T_BERRY
 
 BUILDING_DEFS = {
     "floor": {"name": "地板", "layer": 0, "walkable": True, "w": 1, "h": 1, "variants": {
         "wood": {"name": "木地板", "cost": {"wood": 2}, "hp": 50, "build_time": 30, "color": (170, 130, 80)},
-        "stone": {"name": "石地板", "cost": {"stone": 2}, "hp": 100, "build_time": 50, "color": (140, 140, 145)}}},
+        "stone": {"name": "石地板", "cost": {"stone": 2}, "hp": 100, "build_time": 50, "color": (140, 140, 145)},
+        "iron": {"name": "铁地板", "cost": {"iron": 2}, "hp": 170, "build_time": 55, "color": (165, 170, 180)},
+        "wool": {"name": "羊毛地毯", "cost": {"wool": 2}, "hp": 60, "build_time": 40, "color": (168, 58, 66)}}},
     "wall": {"name": "墙", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
         "wood": {"name": "木墙", "cost": {"wood": 4}, "hp": 80, "build_time": 30, "color": (130, 90, 50)},
-        "stone": {"name": "石墙", "cost": {"stone": 5}, "hp": 200, "build_time": 60, "color": (100, 100, 105)}}},
+        "stone": {"name": "石墙", "cost": {"stone": 5}, "hp": 200, "build_time": 60, "color": (100, 100, 105)},
+        "iron": {"name": "铁墙", "cost": {"iron": 4}, "hp": 400, "build_time": 70, "color": (150, 155, 168)}}},
     "window": {"name": "窗", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
         "wood": {"name": "木窗", "cost": {"wood": 2}, "hp": 50, "build_time": 25, "color": (130, 90, 50)},
-        "stone": {"name": "石窗", "cost": {"stone": 3}, "hp": 100, "build_time": 45, "color": (100, 100, 105)}}},
+        "stone": {"name": "石窗", "cost": {"stone": 3}, "hp": 100, "build_time": 45, "color": (100, 100, 105)},
+        "iron": {"name": "铁窗", "cost": {"iron": 3}, "hp": 200, "build_time": 50, "color": (150, 155, 168)}}},
     "door": {"name": "门", "layer": 1, "walkable": True, "w": 1, "h": 1, "variants": {
         "wood": {"name": "木门", "cost": {"wood": 4}, "hp": 80, "build_time": 40, "color": (160, 110, 60)},
-        "stone": {"name": "石门", "cost": {"stone": 6}, "hp": 150, "build_time": 80, "color": (120, 120, 125)}}},
+        "stone": {"name": "石门", "cost": {"stone": 6}, "hp": 150, "build_time": 80, "color": (120, 120, 125)},
+        "iron": {"name": "铁门", "cost": {"iron": 5}, "hp": 320, "build_time": 85, "color": (160, 165, 178)}}},
     "bed": {"name": "床", "layer": 1, "walkable": True, "w": 1, "h": 2, "variants": {
-        "wood": {"name": "灰白床", "cost": {"wood": 6}, "hp": 80, "build_time": 50, "color": (230, 230, 235)}}},
+        "wood": {"name": "灰白床", "cost": {"wood": 6}, "hp": 80, "build_time": 50, "color": (230, 230, 235)},
+        "feather": {"name": "羽绒软床", "cost": {"wood": 4, "feather": 6, "wool": 2}, "hp": 80, "build_time": 70,
+                    "color": (240, 225, 200)}}},    # 睡得更香：休息恢复 +50%
     "medical_bed": {"name": "医疗床", "layer": 1, "walkable": True, "w": 1, "h": 2, "variants": {
         "wood": {"name": "医疗床", "cost": {"wood": 8, "medicine": 2}, "hp": 80, "build_time": 60,
                  "color": (180, 220, 230)}}},
@@ -30,6 +38,14 @@ BUILDING_DEFS = {
     "workbench": {"name": "工作台", "layer": 1, "walkable": False, "w": 2, "h": 1, "variants": {
         "wood": {"name": "工作台", "cost": {"wood": 15, "stone": 5}, "hp": 120, "build_time": 90,
                  "color": (160, 120, 80)}}},
+    "flower_pot": {"name": "花盆", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
+        "wood": {"name": "花盆", "cost": {"wood": 3}, "hp": 30, "build_time": 20, "color": (170, 100, 70)}}},
+    "statue": {"name": "雕像", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
+        "stone": {"name": "石雕像", "cost": {"stone": 12}, "hp": 150, "build_time": 100, "color": (170, 170, 175)}}},
+    "bookshelf": {"name": "书架", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
+        "wood": {"name": "书架", "cost": {"wood": 8}, "hp": 70, "build_time": 45, "color": (140, 95, 60)}}},
+    "fountain": {"name": "喷泉", "layer": 1, "walkable": False, "w": 1, "h": 1, "variants": {
+        "stone": {"name": "石喷泉", "cost": {"stone": 18}, "hp": 160, "build_time": 120, "color": (150, 160, 170)}}},
     "small_cabinet": {"name": "小柜子", "layer": 1, "walkable": False, "w": 1, "h": 1, "max_types": 5, "variants": {
         "wood": {"name": "小木柜", "cost": {"wood": 6}, "hp": 100, "build_time": 40, "color": (150, 110, 70)}}},
     "large_cabinet": {"name": "大柜子", "layer": 1, "walkable": False, "w": 1, "h": 2, "max_types": 10, "variants": {
@@ -68,6 +84,9 @@ class Blueprint:
     def draw(self, surface, camera, font):
         sx, sy = camera.world_to_screen(self.tx * TILE_SIZE, self.ty * TILE_SIZE)
         rect = pygame.Rect(sx, sy, TILE_SIZE * self.w, TILE_SIZE * self.h)
+        gt = textures.building(self)
+        if gt is not None:                                    # 蓝图：半透明的真实贴图预览
+            ghost = gt.copy(); ghost.set_alpha(135); surface.blit(ghost, (sx, sy))
         s = pygame.Surface(rect.size, pygame.SRCALPHA)
         if self.has_all_materials():
             s.fill((100, 160, 220, 120))
@@ -96,6 +115,9 @@ class Building:
         self.max_types, self.capacity, self.inventory = BUILDING_DEFS[kind].get("max_types", 0), 100, {}
         self.cook_queue, self.cook_progress = [], 0.0
         self.craft_queue, self.craft_progress = [], 0.0
+        # 多人使用规则：team=False 只允许 1 人；team=True 最多 team_cap 人同时干（研究进度叠加 / 共同制造同一件）
+        self.team, self.team_cap, self.workers = (kind == "research_bench"), 3, []
+        self.craft_ready = False          # 当前队首物品的材料已经扣掉，可以直接开工
         self.smelt_queue, self.smelt_progress = [], 0.0
         self.delivered_ingredients = {}
         self.delivered_materials = {}
@@ -117,6 +139,32 @@ class Building:
             return True
         return False
 
+    def _draw_overlay(self, surface, sx, sy, W, H):
+        """贴图之上的动态内容：工作进度条、炉火。"""
+        def bar(ratio, col):
+            pygame.draw.rect(surface, (40, 40, 40), (sx + 4, sy - 12, W - 8, 6))
+            pygame.draw.rect(surface, col, (sx + 4, sy - 12, int((W - 8) * min(1.0, ratio)), 6))
+            pygame.draw.rect(surface, (0, 0, 0), (sx + 4, sy - 12, W - 8, 6), 1)
+        if self.kind == "stove":
+            if self.cook_queue:
+                glow = pygame.Surface((W, H), pygame.SRCALPHA)
+                for i in range(3):
+                    cx = TILE_SIZE * i + TILE_SIZE // 2 if self.rotation % 2 == 0 else TILE_SIZE // 2
+                    cy = TILE_SIZE // 2 if self.rotation % 2 == 0 else TILE_SIZE * i + TILE_SIZE // 2
+                    pygame.draw.circle(glow, (255, 120, 40, 150), (cx, cy), 8)
+                    pygame.draw.circle(glow, (255, 220, 120, 190), (cx, cy), 4)
+                surface.blit(glow, (sx, sy))
+            if self.cook_progress > 0: bar(self.cook_progress / 100.0, (255, 200, 60))
+        elif self.kind == "furnace":
+            if self.smelt_queue:
+                fire = pygame.Surface((W, H), pygame.SRCALPHA)
+                pygame.draw.rect(fire, (255, 110, 40, 210), (17, 40, 30, 13), border_radius=3)
+                pygame.draw.rect(fire, (255, 210, 110, 230), (23, 44, 18, 7), border_radius=2)
+                surface.blit(fire, (sx, sy))
+            if self.smelt_progress > 0: bar(self.smelt_progress / 150.0, (255, 150, 50))
+        elif self.kind == "workbench":
+            if self.craft_progress > 0: bar(self.craft_progress / 150.0, (100, 150, 255))
+
     def draw(self, surface, camera):
         sx, sy = camera.world_to_screen(self.tx * TILE_SIZE, self.ty * TILE_SIZE)
         W, H = TILE_SIZE * self.w, TILE_SIZE * self.h
@@ -125,6 +173,14 @@ class Building:
         color = self.color
         if self.hp < self.max_hp * 0.4:
             if int(pygame.time.get_ticks() / 200) % 2 == 0: color = (200, 50, 50)
+
+        tex = textures.building(self)
+        if tex is not None:                                  # 有贴图：贴图 + 动态叠加层（进度条/火光/受损闪烁）
+            surface.blit(tex, (sx, sy))
+            if color != self.color:
+                red = pygame.Surface((W, H), pygame.SRCALPHA); red.fill((220, 40, 40, 110)); surface.blit(red, (sx, sy))
+            self._draw_overlay(surface, sx, sy, W, H)
+            return
 
         if self.kind == "floor":
             pygame.draw.rect(surface, color, rect);
@@ -136,7 +192,7 @@ class Building:
             pygame.draw.line(surface, (150, 160, 170), (sx + W, sy), (sx, sy + H), 1)
         elif self.kind == "wall":
             pygame.draw.rect(surface, color, rect)
-            line_col = (70, 70, 75) if self.material == "stone" else (90, 60, 30)
+            line_col = {"stone": (70, 70, 75), "iron": (95, 100, 115)}.get(self.material, (90, 60, 30))
             pygame.draw.rect(surface, line_col, rect, 2)
             for i in range(1, self.h * 3):
                 yy = sy + i * TILE_SIZE // 3
@@ -148,7 +204,7 @@ class Building:
                 yy = sy + i * TILE_SIZE // 3
                 if yy < sy + H: pygame.draw.line(surface, (120, 130, 140), (sx, yy), (sx + W, yy), 1)
         elif self.kind == "window":
-            frame = (100, 100, 105) if self.material == "stone" else (130, 90, 50)
+            frame = {"stone": (100, 100, 105), "iron": (120, 125, 140)}.get(self.material, (130, 90, 50))
             pygame.draw.rect(surface, frame, rect)
             s = pygame.Surface((TILE_SIZE - 8, TILE_SIZE - 8), pygame.SRCALPHA)
             s.fill((150, 200, 220, 120));
@@ -160,7 +216,7 @@ class Building:
                              2)
         elif self.kind == "door":
             pygame.draw.rect(surface, color, rect)
-            frame_col = (110, 70, 40) if self.material == "wood" else (70, 70, 75)
+            frame_col = {"wood": (110, 70, 40), "iron": (90, 95, 110)}.get(self.material, (70, 70, 75))
             pygame.draw.rect(surface, frame_col, rect, 2)
             pygame.draw.circle(surface, (255, 220, 100), (int(sx + TILE_SIZE - 6), int(sy + TILE_SIZE // 2)), 2)
         elif self.kind in ("bed", "medical_bed"):
@@ -224,6 +280,27 @@ class Building:
                 pygame.draw.rect(surface, (40, 40, 40), (sx + 4, sy - 12, W - 8, 6));
                 pygame.draw.rect(surface, (100, 150, 255), (sx + 4, sy - 12, bw, 6));
                 pygame.draw.rect(surface, (0, 0, 0), (sx + 4, sy - 12, W - 8, 6), 1)
+        elif self.kind == "flower_pot":
+            pygame.draw.rect(surface, (170, 100, 70), (sx + 9, sy + 18, TILE_SIZE - 18, 11))
+            pygame.draw.line(surface, (60, 140, 60), (sx + TILE_SIZE // 2, sy + 18), (sx + TILE_SIZE // 2, sy + 9), 2)
+            for ox, c_ in ((-5, (230, 90, 120)), (0, (250, 210, 80)), (5, (200, 120, 230))):
+                pygame.draw.circle(surface, c_, (sx + TILE_SIZE // 2 + ox, sy + 8), 4)
+        elif self.kind == "statue":
+            pygame.draw.rect(surface, (120, 120, 125), (sx + 6, sy + 22, TILE_SIZE - 12, 7))
+            pygame.draw.rect(surface, color, (sx + 11, sy + 10, TILE_SIZE - 22, 13), border_radius=3)
+            pygame.draw.circle(surface, color, (sx + TILE_SIZE // 2, sy + 7), 5)
+            pygame.draw.rect(surface, (110, 110, 115), (sx + 11, sy + 10, TILE_SIZE - 22, 13), 1, border_radius=3)
+        elif self.kind == "bookshelf":
+            pygame.draw.rect(surface, (140, 95, 60), rect)
+            for i_, row_y in enumerate((sy + 5, sy + 15, sy + 25)):
+                for j_, bc in enumerate(((200, 70, 70), (70, 120, 200), (220, 190, 70), (90, 170, 100))):
+                    pygame.draw.rect(surface, bc, (sx + 4 + j_ * 6, row_y, 5, 8))
+            pygame.draw.rect(surface, (90, 60, 35), rect, 2)
+        elif self.kind == "fountain":
+            pygame.draw.circle(surface, (120, 125, 135), (sx + TILE_SIZE // 2, sy + TILE_SIZE // 2), 13)
+            pygame.draw.circle(surface, (90, 160, 220), (sx + TILE_SIZE // 2, sy + TILE_SIZE // 2), 10)
+            pygame.draw.line(surface, (200, 230, 250), (sx + TILE_SIZE // 2, sy + 18), (sx + TILE_SIZE // 2, sy + 7), 2)
+            pygame.draw.circle(surface, (220, 240, 255), (sx + TILE_SIZE // 2, sy + 6), 3)
         elif self.kind == "small_cabinet":
             pygame.draw.rect(surface, (150, 110, 70), rect);
             pygame.draw.rect(surface, (100, 70, 40), rect, 2)

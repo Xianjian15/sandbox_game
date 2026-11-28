@@ -16,8 +16,17 @@ import random
 AVATAR_SIZE = 48
 AVATAR_BYTES = AVATAR_SIZE * AVATAR_SIZE * 3
 NAME_MAX = 12
-# 玩家 1~4 的代表色（小人脚下的环、顶部玩家栏、默认头像都用它）
-PLAYER_COLORS = ((90, 160, 255), (255, 150, 60), (120, 220, 120), (220, 100, 220))
+GENDERS = ("male", "female")
+GENDER_NAMES = {"male": "男性", "female": "女性"}
+_G_WIRE = {"male": "m", "female": "f"}
+_G_FROM = {"m": "male", "f": "female"}
+
+
+def gender_from_wire(v):
+    return _G_FROM.get(v, "male")
+# 玩家 1~6 的代表色（数量必须 >= net.session.MAX_PLAYERS）（小人脚下的环、顶部玩家栏、默认头像都用它）
+PLAYER_COLORS = ((90, 160, 255), (255, 150, 60), (120, 220, 120), (220, 100, 220),
+                 (235, 215, 70), (70, 215, 215))
 
 
 def sanitize_name(s, default=""):
@@ -52,7 +61,8 @@ def clean_wire(d, fallback_name):
     d = d if isinstance(d, dict) else {}
     name = sanitize_name(d.get("name"), fallback_name)
     av = d.get("av")
-    return {"name": name, "av": av if decode_avatar(av) is not None else None}
+    return {"name": name, "av": av if decode_avatar(av) is not None else None,
+            "g": d.get("g") if d.get("g") in _G_FROM else "m"}
 
 
 def dedupe_names(names):
@@ -75,13 +85,14 @@ def dedupe_names(names):
 
 class Profile:
     """本机玩家资料。path 为 None 时不存盘（测试用）。"""
-    def __init__(self, name=None, avatar=None, path=None):
+    def __init__(self, name=None, avatar=None, path=None, gender="male"):
+        self.gender = gender if gender in GENDERS else "male"        # 自己角色的性别（只影响小人外观）
         self.name = sanitize_name(name, "") or random_name()
         self.avatar = avatar if (avatar is None or len(avatar) == AVATAR_BYTES) else None
         self.path = path
 
     def to_wire(self):
-        return {"name": self.name, "av": encode_avatar(self.avatar)}
+        return {"name": self.name, "av": encode_avatar(self.avatar), "g": _G_WIRE[self.gender]}
 
     def save(self):
         if not self.path:
@@ -106,7 +117,7 @@ class Profile:
         except (OSError, ValueError):
             d = None
         if isinstance(d, dict) and sanitize_name(d.get("name")):
-            return cls(d.get("name"), decode_avatar(d.get("av")), path)
+            return cls(d.get("name"), decode_avatar(d.get("av")), path, gender_from_wire(d.get("g")))
         p = cls(None, None, path)
         p.save()
         return p

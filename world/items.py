@@ -3,21 +3,28 @@ import pygame
 import math
 import zlib
 from settings import TILE_SIZE
+from core import textures
 
 ITEM_DEFS = {
     "wood": {"name": "木头", "color": (139, 90, 43), "type": "material"},
     "stone": {"name": "石头", "color": (130, 130, 135), "type": "material"},
     "iron_ore": {"name": "粗铁", "color": (180, 100, 80), "type": "material"},
     "iron": {"name": "铁", "color": (200, 200, 210), "type": "material"},
-    "food": {"name": "浆果", "color": (200, 80, 80), "type": "food", "food_type": "veg"},
-    "meat": {"name": "生肉", "color": (180, 50, 50), "type": "food", "food_type": "meat"},
+    "food": {"name": "浆果", "color": (200, 80, 80), "type": "food", "food_type": "veg", "nutrition": 12, "mood": 0},
+    "meat": {"name": "生肉", "color": (180, 50, 50), "type": "food", "food_type": "meat", "nutrition": 22, "mood": -3},
     "leather": {"name": "皮革", "color": (180, 140, 100), "type": "material"},
-    "meal_simple": {"name": "简单食物", "color": (200, 180, 100), "type": "food", "food_type": "meal"},
-    "meal_fine": {"name": "美味食物", "color": (100, 200, 100), "type": "food", "food_type": "meal"},
+    "feather": {"name": "羽毛", "color": (230, 220, 190), "type": "material"},
+    "wool": {"name": "羊毛", "color": (240, 240, 235), "type": "material"},
+    "meal_simple": {"name": "简单食物", "color": (200, 180, 100), "type": "food", "food_type": "meal", "nutrition": 45, "mood": 5},
+    "meal_fine": {"name": "美味食物", "color": (100, 200, 100), "type": "food", "food_type": "meal", "nutrition": 80, "mood": 15},
     "medicine": {"name": "草药", "color": (100, 200, 150), "type": "material"},
     "axe": {"name": "铁斧", "color": (100, 100, 110), "type": "item"},
     "stone_pickaxe": {"name": "石镐", "color": (130, 130, 135), "type": "item"},
     "iron_pickaxe": {"name": "铁镐", "color": (150, 150, 160), "type": "item"},
+    "stone_axe": {"name": "石斧", "color": (125, 125, 130), "type": "item"},
+    "stone_spear": {"name": "石矛", "color": (140, 120, 100), "type": "item"},
+    "stone_hammer": {"name": "石锤", "color": (110, 110, 115), "type": "item"},
+    "stone_knife": {"name": "石刀", "color": (160, 160, 165), "type": "item"},
     "longsword": {"name": "长剑", "color": (220, 220, 220), "type": "item"},
     "gun": {"name": "枪械", "color": (80, 80, 80), "type": "item"},
 }
@@ -47,6 +54,12 @@ class ItemStack:
     def draw(self, surface, camera, font):
         if self.amount <= 0: return
         sx, sy = camera.world_to_screen(self.x, self.y)
+
+        ic = textures.icon(self.kind, 26)
+        if ic is not None:                                   # 有贴图：图标 + 右下角数量
+            surface.blit(ic, (sx - 13, sy - 14))
+            self._draw_amount(surface, font, sx + 8, sy + 8)
+            return
 
         if self.kind == "meat":
             pygame.draw.line(surface, (240, 240, 240), (sx - 8, sy - 6), (sx + 8, sy + 6), 4)
@@ -102,6 +115,27 @@ class ItemStack:
             pygame.draw.line(surface, (139, 69, 19), (sx - 8, sy + 8), (sx + 4, sy - 4), 3)
             color = (130, 130, 135) if self.kind == "stone_pickaxe" else (180, 180, 190)
             pygame.draw.lines(surface, color, False, [(sx - 4, sy - 10), (sx + 4, sy - 12), (sx + 10, sy - 4)], 4)
+        elif self.kind in ("bow", "crossbow"):
+            if self.kind == "crossbow": pygame.draw.line(surface, (90, 90, 95), (sx - 8, sy), (sx + 9, sy), 2)
+            pygame.draw.arc(surface, (150, 105, 60), (sx - 5, sy - 11, 12, 22), -1.4, 1.4, 3)
+            pygame.draw.line(surface, (230, 230, 220), (sx + 4, sy - 10), (sx + 4, sy + 10), 1)
+        elif self.kind in ("war_hammer",):
+            pygame.draw.line(surface, (110, 70, 30), (sx - 8, sy + 8), (sx + 5, sy - 5), 3)
+            pygame.draw.rect(surface, (120, 120, 135), (sx - 1, sy - 12, 14, 9))
+        elif self.kind in ("machete", "dagger", "iron_spear"):
+            c_ = ITEM_DEFS[self.kind]["color"]
+            pygame.draw.line(surface, (110, 70, 30), (sx - 8, sy + 8), (sx - 3, sy + 3), 3)
+            pygame.draw.line(surface, c_, (sx - 3, sy + 3), (sx + 9 if self.kind != "dagger" else sx + 4, sy - 9 if self.kind != "dagger" else sy - 4), 3 if self.kind == "machete" else 2)
+        elif self.kind in ("pistol", "rifle", "shotgun", "smg", "sniper"):
+            ln = {"pistol": 8, "rifle": 14, "shotgun": 14, "smg": 11, "sniper": 17}[self.kind]
+            pygame.draw.rect(surface, ITEM_DEFS[self.kind]["color"], (sx - ln // 2, sy - 3, ln, 5))
+            pygame.draw.rect(surface, (50, 50, 55), (sx - ln // 2 + 2, sy + 2, 3, 5))
+        elif self.kind in ("stone_axe", "stone_hammer"):
+            pygame.draw.line(surface, (139, 69, 19), (sx - 8, sy + 8), (sx + 4, sy - 4), 3)
+            pygame.draw.rect(surface, (125, 125, 130), (sx - 1, sy - 10, 12, 8 if self.kind == "stone_axe" else 10))
+        elif self.kind in ("stone_spear", "stone_knife"):
+            pygame.draw.line(surface, (139, 69, 19), (sx - 8, sy + 8), (sx + 6, sy - 6), 2)
+            pygame.draw.polygon(surface, (160, 160, 165), [(sx + 4, sy - 4), (sx + 11, sy - 11), (sx + 8, sy - 2)])
         elif self.kind == "longsword":
             pygame.draw.line(surface, (200, 200, 200), (sx - 6, sy + 6), (sx + 8, sy - 8), 3)
             pygame.draw.line(surface, (255, 255, 255), (sx - 4, sy + 4), (sx + 6, sy - 6), 1)
@@ -115,6 +149,9 @@ class ItemStack:
             d = ITEM_DEFS.get(self.kind, {"color": (200, 200, 200)})
             pygame.draw.rect(surface, d["color"], (sx - 6, sy - 6, 12, 12))
 
+        self._draw_amount(surface, font, sx, sy)
+
+    def _draw_amount(self, surface, font, sx, sy):
         key = (id(font), self.amount)
         pair = _TEXT_CACHE.get(key)
         if pair is None:                       # 数字贴图按(字体, 数量)缓存：以前每个物品堆每帧渲染 5 次文字
@@ -157,3 +194,9 @@ class ItemManager:
         x1, y1, x2, y2 = camera.view_tiles()
         for s in self.stacks.values():
             if x1 <= s.tx <= x2 and y1 <= s.ty <= y2: s.draw(surface, camera, font)
+
+# 武器/工具表里的每一件都自动有对应的物品定义（新增武器只改 combat/weapons.py）
+from combat.weapons import WEAPONS as _W
+for _k, _w in _W.items():
+    if _k != "fist" and _k not in ITEM_DEFS:
+        ITEM_DEFS[_k] = {"name": _w["name"], "color": _w["color"], "type": "item"}

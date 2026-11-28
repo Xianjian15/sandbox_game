@@ -13,7 +13,7 @@ import socket
 import time
 
 from core.version import GAME_VERSION
-from net.session import PROTO, get_lan_ip
+from net.session import PROTO, MAX_PLAYERS, get_lan_ip
 
 DISC_PORT = 47778
 MAGIC = "RWLAN1"
@@ -33,7 +33,7 @@ def broadcast_targets():
 
 class RoomBeacon:
     """房主端：定时广播房间信息。"""
-    def __init__(self, room_id, name, tcp_port, players=1, max_players=2,
+    def __init__(self, room_id, name, tcp_port, players=1, max_players=MAX_PLAYERS,
                  port=DISC_PORT, targets=None, interval=BEACON_INTERVAL):
         self.info = {"magic": MAGIC, "proto": PROTO, "ver": GAME_VERSION, "id": room_id, "name": name,
                      "port": tcp_port, "players": players, "max": max_players}
@@ -110,7 +110,7 @@ class RoomFinder:
             self.rooms[rid] = {
                 "id": rid, "name": str(info.get("name", "房间"))[:40], "ip": addr[0],
                 "port": int(info["port"]), "players": int(info.get("players", 1)),
-                "max": int(info.get("max", 2)), "proto": info.get("proto"),
+                "max": int(info.get("max", MAX_PLAYERS)), "proto": info.get("proto"),
                 "ver": str(info.get("ver", ""))[:16], "seen": now,
             }
         except (ValueError, KeyError, TypeError, UnicodeDecodeError):

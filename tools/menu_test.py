@@ -5,10 +5,10 @@
   2 房间名输入        默认名、退格、长度上限、不可见字符、空名回落到默认名
   3 房间发现          房主广播 → 玩家列表出现 → 房主关房后列表按 TTL 消失；乱包被忽略；多房间排序
   4 完整流程          两个菜单：一个创建房间，另一个点击房间加入（不输入任何 IP），停在大厅，房主点"开始游戏"，然后联机对拍
-  5 多人同房          三位玩家加入同一房间：大厅人数实时同步、房间列表里的人数更新；房主点开始后全部就绪；第 4 人之后满员
+  5 多人同房          三位玩家加入同一房间：大厅人数实时同步、房间列表里的人数更新；房主点开始后全部就绪；满 MAX_PLAYERS 人后满员
   5b 开局后迟到       房主开始后，列表里还留着旧房间的玩家去点：得到失败提示而不是卡死；房主关房时大厅里的玩家得到"房间已关闭"
   6 捣乱连接          有人连上房间却不说话/发乱码：房间不死，之后真正的玩家仍能加入
-  7 版本不符/已满     协议版本不同或满 4 人的房间显示为不可加入
+  7 版本不符/已满     协议版本不同或满员的房间显示为不可加入
   8 资源释放          取消房间后端口/广播都被释放
 用法： python -m tools.menu_test
 """
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pygame                                                   # noqa: E402
 from net import session as netsession                           # noqa: E402
 from net.discovery import RoomBeacon, RoomFinder                # noqa: E402
-from net.session import LockstepSession                         # noqa: E402
+from net.session import LockstepSession, MAX_PLAYERS                         # noqa: E402
 from ui.menu import MenuModel                                   # noqa: E402
 from tools import multi_test as mt                              # noqa: E402
 
@@ -82,7 +82,7 @@ def sc_navigation():
     assert m.screen == "main"
     labels = [w.text for w in m.layout(W, H) if w.kind == "button"]
     log.append(f"主菜单按钮={labels}")
-    ok = labels == ["单人游戏", "多人游戏", "新手教程", "退出"]
+    ok = labels == ["单人游戏", "多人游戏", "新手教程", "角色设置（男性）", "退出"]
     m.key("down"); m.key("down"); m.key("up")
     ok &= m.sel == 1
     m.key("enter")                                     # 选中"多人游戏"
@@ -203,30 +203,31 @@ def sc_full_flow():
 def sc_multi():
     disc = free_udp_port(); clock = Clock()
     host, c1 = make_pair(clock, disc)
-    cs = [c1] + [MenuModel(cfg(disc), clock=clock) for _ in range(2)]
+    N = MAX_PLAYERS
+    cs = [c1] + [MenuModel(cfg(disc), clock=clock) for _ in range(N - 2)]
     for m in cs[1:]: click(m, "multi")
     assert run_until([host] + cs, clock, lambda: all(len(m.rooms()) == 1 for m in cs))
     start0 = widget(host, "start_host")
     ok = start0 is None                                                   # 只有房主一人：开始按钮不可用
     rid = c1.rooms()[0]["id"]
     for m in cs: click(m, "join", rid)
-    run_until([host] + cs, clock, lambda: host.session.lobby_count() == 3
-              and all(m.session is not None and m.session.lobby_n == 4 for m in cs))
+    run_until([host] + cs, clock, lambda: host.session.lobby_count() == N - 1
+              and all(m.session is not None and m.session.lobby_n == N for m in cs))
     counts = [host.session.player_count()] + [m.session.lobby_n for m in cs]
-    ok &= counts == [4, 4, 4, 4]
-    # 房间列表里（第 5 个玩家看到的）显示 4/4 已满且不可加入
+    ok &= counts == [N] * N
+    # 房间列表里（第 N+1 个玩家看到的）显示 N/N 已满且不可加入
     viewer = MenuModel(cfg(disc), clock=clock); click(viewer, "multi")
-    run_until([host, viewer] + cs, clock, lambda: any(r["players"] == 4 for r in viewer.rooms()))
+    run_until([host, viewer] + cs, clock, lambda: any(r["players"] == N for r in viewer.rooms()))
     row = next((w for w in viewer.layout(W, H) if w.kind == "row"), None)
-    ok &= row is not None and (not row.enabled) and "4/4" in row.right and "已满" in row.right
+    ok &= row is not None and (not row.enabled) and f"{N}/{N}" in row.right and "已满" in row.right
     ok &= widget(host, "start_host") is not None
     done = start_and_wait(host, cs, clock)
     ok &= bool(done)
     sess = [host.result["session"]] + [m.result["session"] for m in cs]
-    ok &= sorted(s.cfg["player"] for s in sess) == [0, 1, 2, 3] and all(s.cfg["players"] == 4 for s in sess)
+    ok &= sorted(s.cfg["player"] for s in sess) == list(range(N)) and all(s.cfg["players"] == N for s in sess)
     host.close(); [m.close() for m in cs]; viewer.close()
     good, states = play_check([host] + cs, turns=1200)
-    return ok and good, f"大厅人数={counts}；满员行={row.right if row else None}；开局编号={sorted(s.cfg['player'] for s in sess)}；四人联机一致={good} {states}"
+    return ok and good, f"大厅人数={counts}；满员行={row.right if row else None}；开局编号={sorted(s.cfg['player'] for s in sess)}；满员联机一致={good} {states}"
 
 
 def sc_late_join():
@@ -300,7 +301,7 @@ def sc_proto():
     m = MenuModel(cfg(disc), clock=clock); click(m, "multi")
     old = RoomBeacon("old1", "老版本房间", 5555, port=disc, targets=[BCAST])
     old.info["proto"] = 999
-    full = RoomBeacon("full", "满员房间", 5556, players=4, port=disc, targets=[BCAST])
+    full = RoomBeacon("full", "满员房间", 5556, players=MAX_PLAYERS, port=disc, targets=[BCAST])
     assert run_until([m], clock, lambda: (old.update(clock()), full.update(clock()), len(m.rooms()) == 2)[2])
     rows = {w.text: w for w in m.layout(W, H) if w.kind == "row"}
     ok = (not rows["老版本房间"].enabled) and "版本不符" in rows["老版本房间"].right
@@ -340,9 +341,9 @@ def sc_release():
 def main():
     pygame.init(); pygame.font.init()
     plan = [("1 菜单导航", sc_navigation), ("2 房间名输入", sc_text), ("3 房间发现(UDP)", sc_discovery),
-            ("4 完整流程：创建→发现→加入大厅→房主开始→联机对拍", sc_full_flow), ("5 四人同房：大厅/满员/开局/联机", sc_multi),
+            ("4 完整流程：创建→发现→加入大厅→房主开始→联机对拍", sc_full_flow), ("5 满员同房：大厅/满员/开局/联机", sc_multi),
             ("5b 开局后迟到 + 房主关房", sc_late_join), ("6 捣乱连接不影响房间", sc_stray),
-            ("7 版本不符/已满(4人)的房间", sc_proto), ("8 取消房间释放资源", sc_release)]
+            ("7 版本不符/已满的房间", sc_proto), ("8 取消房间释放资源", sc_release)]
     allok = True
     for name, fn in plan:
         t0 = time.time()

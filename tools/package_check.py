@@ -34,6 +34,8 @@ def module_file(name):
         return base + ".py"
     if os.path.isfile(os.path.join(base, "__init__.py")):
         return os.path.join(base, "__init__.py")
+    if os.path.isdir(base):
+        return base                              # 命名空间包（没有 __init__.py 的文件夹）：Python 认，但 PyInstaller 不稳，下面单独报
     return None
 
 
@@ -76,6 +78,8 @@ def import_graph(entry="main"):
         parts = m.split(".")
         for i in range(1, len(parts)):
             queue.append(".".join(parts[:i]))
+        if os.path.isdir(path):                  # 命名空间包本身没有代码可扫描
+            continue
         mods, dyn = scan_imports(path)
         if dyn:
             dynamic_files.append(os.path.relpath(path, ROOT))
@@ -105,10 +109,14 @@ def check_graph():
         bad.append("使用了相对导入（打包不友好）: " + "; ".join(f"{f}:{m}" for f, m in relative))
     if uses_tools:
         bad.append("游戏代码依赖了 tools/（测试脚本不应被游戏引用）: " + "; ".join(f"{f}→{m}" for f, m in uses_tools))
-    pkgs = {m.split(".")[0] for m in seen if "." in m} | {m for m in seen if module_file(m) and module_file(m).endswith("__init__.py")}
-    for p in sorted(pkgs):
-        if p in LOCAL_TOPS and os.path.isdir(os.path.join(ROOT, p)) and not os.path.isfile(os.path.join(ROOT, p, "__init__.py")):
-            bad.append(f"包 {p}/ 缺少 __init__.py")
+    tops = {m.split(".")[0] for m in seen}
+    nopkg = [p for p in sorted(tops) if p in LOCAL_TOPS and os.path.isdir(os.path.join(ROOT, p))
+             and not os.path.isfile(os.path.join(ROOT, p, "__init__.py"))]
+    if nopkg:
+        names = ", ".join(f"{p}/" for p in nopkg)
+        cmd = ", ".join(f"{p}\\__init__.py" for p in nopkg)
+        bad.append(f"这些文件夹缺少 __init__.py：{names}（游戏能运行，但 PyInstaller 可能漏打模块）。"
+                   f"在每个文件夹里新建一个空文件 __init__.py 即可，PowerShell 一条命令：New-Item {cmd} -ItemType File")
     return (not bad), f"从 main.py 可达 {len(seen)} 个项目模块", bad, third, dyn
 
 

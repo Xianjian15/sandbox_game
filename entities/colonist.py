@@ -3,13 +3,14 @@ import os
 import pygame
 import random
 import math
+from core import textures
 from settings import TILE_SIZE, WHITE, SELECT
 from core.pathfinding import astar
 from core.regen import regen_amount
 from world.buildings import BUILDING_DEFS
-from world.world import T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK
+from world.world import T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK, T_METEOR
 from world.items import ITEM_DEFS
-from combat.weapons import get_weapon, WEAPONS
+from combat.weapons import get_weapon, WEAPONS, craft_need, EQUIPPABLE
 from combat.weapon_render import draw_weapon
 
 FOOD_KINDS = ("meal_fine", "meal_simple", "food", "meat")   # 能直接吃的东西
@@ -18,12 +19,14 @@ DEBUG_BUILD = os.environ.get("RW_DEBUG") == "1"  # 调试建造流程：运行�
 
 
 class Colonist:
+    HUNT_GIVE_UP = 40.0       # 秒：一只猎物追打超过这么久就放弃（够不着/追不上）
     def __init__(self, tx, ty, name=None, weapon_key="fist", *, ctx):
         # ctx：SimContext，持有 id 分配、物品/建筑/房间引用、采集占用集合等共享状态
         self.ctx = ctx
         self.id = ctx.next_id()
         # 多人模式：owner_id 表示该小人归属哪个玩家（0 = 玩家1）
         self.owner_id = 0
+        self.gender = "male"                # 外观性别（male/female），只影响贴图，不参与模拟/哈希
 
         self.x, self.y = tx * TILE_SIZE + TILE_SIZE / 2, ty * TILE_SIZE + TILE_SIZE / 2
         self.name = name or f"小人{self.id}"
@@ -52,6 +55,8 @@ class Colonist:
         self.tool_key = None
 
         self.cooldown_timer, self.target_enemy, self.target_animal = 0.0, None, None
+        self.hunt_timer = 0.0      # 当前这只猎物追了多久（超过 HUNT_GIVE_UP 秒放弃）
+        self.chase_timer = 0.0     # 追击时重新规划路线的间隔
         self.hit_flash, self.auto_retaliate, self.recent_shot = 0.0, True, None
         self.facing_angle, self.queue = 0.0, []
 
@@ -121,7 +126,11 @@ class Colonist:
         self.bleeding += amount * 0.05
         if self.state == "sleeping": self._wake_up()
         # 自动反击只在没有 combat_lock 时才劫持目标
-        if attacker is not None and self.auto_retaliate and self.target_enemy is None and self.combat_lock is None:
+        if attacker is not None and hasattr(attacker, "species"):
+            # 动物（野猪）咬人：当作猎物处理，这样打死后正常掉落肉和皮
+            if self.target_animal is None and self.target_enemy is None and self.combat_lock is None and self.auto_retaliate:
+                self.target_animal = attacker
+        elif attacker is not None and self.auto_retaliate and self.target_enemy is None and self.combat_lock is None:
             self.target_enemy = attacker
         return self.hp <= 0
 
@@ -135,7 +144,8 @@ class Colonist:
             is_sterile = self.ctx.room_mgr.is_in_sterile_room(*self.current_tile())
 
         if self.state == "sleeping":
-            self.rest += 30.0 * dt
+            bed_ = self.ctx.buildings.get_building_at(*self.current_tile()) if self.ctx.buildings else None
+            self.rest += (45.0 if bed_ is not None and bed_.kind == "bed" and bed_.material == "feather" else 30.0) * dt
             self.satiety -= 0.05 * dt
 
             if self.is_patient and is_sterile:
@@ -147,9 +157,8 @@ class Colonist:
             self.satiety -= 0.25 * dt
             self.rest -= 0.12 * dt * (3.0 if game_time.is_night else 1.0)
             if self.state == "eating":
-                self.satiety += 80.0 * dt
+                # 饱食度由"吃下的那份食物"决定（见 _apply_food_effect），这里只负责吃的动作时长
                 self.state_timer -= dt
-                if self.satiety >= 100: self.satiety = 100
                 if self.state_timer <= 0: self.state = None
 
         if self.bleeding > 0 and not (self.state == "sleeping" and self.is_patient and is_sterile):
@@ -207,6 +216,7 @@ class Colonist:
         # 吃饭
         if self.satiety <= 40:
             if self.carrying and self.carrying["kind"] in ("meal_fine", "meal_simple"):
+                self._apply_food_effect(self.carrying["kind"])
                 self.carrying["amount"] -= 1
                 if self.carrying["amount"] <= 0: self.carrying = None
                 self.state, self.state_timer = "eating", 0.8
@@ -240,17 +250,10 @@ class Colonist:
         return candidates[0][1]
 
     def _apply_food_effect(self, food_kind):
-        """吃下一份食物：恢复饱食度/心情。"""
-        if food_kind == "meal_fine":
-            self.satiety = min(100, self.satiety + 100)
-            self.mood = min(100, self.mood + 15)
-        elif food_kind == "meal_simple":
-            self.satiety = min(100, self.satiety + 50)
-            self.mood = min(100, self.mood + 5)
-        elif food_kind == "meat":
-            self.satiety = min(100, self.satiety + 15)
-        else:
-            self.satiety = min(100, self.satiety + 10)
+        """吃下一份食物：按物品表里的 nutrition / mood 恢复饱食度和心情（浆果 12 < 生肉 22 < 简单食物 45 < 美味食物 80）。"""
+        d = ITEM_DEFS.get(food_kind, {})
+        self.satiety = min(100, self.satiety + d.get("nutrition", 10))
+        self.mood = max(0, min(100, self.mood + d.get("mood", 0)))
 
     def _go_eat(self, world, items, food_info, buildings):
         tx, ty, b = food_info
@@ -358,6 +361,36 @@ class Colonist:
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
 
+    def _next_cycle(self, world, items, stockpiles, buildings):
+        """烹饪/熔炼做完一份、成品入库后：队列里还有就自己接着干下一份（以前要玩家再右键一次）。"""
+        job = self.job
+        self._release_job()
+        if not job: return
+        if job["type"] == "cook":
+            st = job["stove"]
+            if st.cook_queue and not st.marked_for_deconstruction:
+                self.assign_cook(world, items, stockpiles, buildings, st)
+        elif job["type"] == "smelt":
+            fu = job["furnace"]
+            if fu.smelt_queue and not fu.marked_for_deconstruction:
+                self.assign_smelt(world, items, stockpiles, buildings, fu)
+
+    def _take_stock(self, items, tx, ty, kind, cab, want):
+        """从柜子/地面一次取走最多 want 个同类材料（受搬运上限限制），返回实际取到的数量。"""
+        cur = self.carrying["amount"] if self.carrying and self.carrying["kind"] == kind else 0
+        want = max(1, min(want, self.carry_limit - cur))
+        taken = 0
+        if cab:
+            n = min(cab.inventory.get(kind, 0), want)
+            if n > 0 and cab.remove_item(kind, n): taken = n
+        else:
+            for st in list(items.get_at(tx, ty)):
+                if st.kind == kind and taken < want and st.amount > 0:
+                    t = min(st.amount, want - taken)
+                    st.amount -= t; taken += t
+                    if st.amount <= 0: items.remove_stack(tx, ty, st.kind)
+        return taken
+
     def _find_food_ingredient(self, items, stockpiles, buildings, kind_list):
         cx, cy = self.current_tile()
         candidates = []
@@ -387,7 +420,7 @@ class Colonist:
 
     def assign_harvest(self, world, tx, ty):
         if not world.is_harvestable(tx, ty): return False
-        if world.get(tx, ty) == T_IRON_ROCK and self.tool_key not in ("stone_pickaxe", "iron_pickaxe"):
+        if world.get(tx, ty) in (T_IRON_ROCK, T_METEOR) and self.tool_key not in ("stone_pickaxe", "iron_pickaxe"):
             return False
         cands = self._find_adjacent_all(world, tx, ty)
         best_p, best_t = None, None
@@ -493,8 +526,23 @@ class Colonist:
             _log(f"成功: 去 {src_tx},{src_ty} 取 {src_kind}")
             return True
 
+    def _station_full(self, b):
+        """工作站已满员（单人=1人，协作=team_cap 人）。已经在里面的人不算占位。"""
+        cap = b.team_cap if b.team else 1
+        return self.id not in b.workers and len(b.workers) >= cap
+
+    def _join_station(self, b):
+        if self.id not in b.workers: b.workers.append(self.id)
+        b.reserved_by = self.id
+
+    def _leave_station(self, b):
+        if b is None: return
+        if self.id in b.workers: b.workers.remove(self.id)
+        if b.reserved_by == self.id: b.reserved_by = b.workers[0] if b.workers else None
+
     def assign_research(self, world, buildings, tx, ty, layer):
         b = buildings.get_building_at(tx, ty)
+        if b and self._station_full(b): return False
         # 研究台是 2x2：站位按整个占地范围的四周找，而不是只看左上角那一格的 8 邻域
         adj = self._find_adjacent_for_build(world, self.current_tile(), b) if b else None
         if not adj: adj = self._find_adjacent(world, self.current_tile(), tx, ty)
@@ -507,7 +555,7 @@ class Colonist:
         self.job = {"type": "research", "tx": tx, "ty": ty, "layer": layer}
         self.work_progress = 0.0
         b = buildings.get_building_at(tx, ty)
-        if b: b.reserved_by = self.id
+        if b: self._join_station(b)
         return True
 
     def assign_hunt(self, animal):
@@ -524,9 +572,8 @@ class Colonist:
         if meal == "meal_simple":
             if sum(stove.delivered_ingredients.values()) < 2: need = ["meat", "food"]
         elif meal == "meal_fine":
-            if sum(stove.delivered_ingredients.values()) < 4:
-                if stove.delivered_ingredients.get("meat", 0) < 2: need.append("meat")
-                if stove.delivered_ingredients.get("food", 0) < 2: need.append("food")
+            if stove.delivered_ingredients.get("meat", 0) < 2: need.append("meat")
+            if stove.delivered_ingredients.get("food", 0) < 2: need.append("food")
 
         if self.carrying and self.carrying["kind"] in need:
             adj = self._find_adjacent(world, self.current_tile(), stove.tx, stove.ty)
@@ -559,7 +606,7 @@ class Colonist:
                 if p is not None:
                     self._release_job()
                     self.path = p
-                    self.job = {"type": "cook", "stove": stove, "stage": "to_stove"}
+                    self.job = {"type": "cook", "stove": stove, "stage": "deliver"}
                     stove.reserved_by = self.id
                     return True
         return False
@@ -578,15 +625,12 @@ class Colonist:
 
     def assign_craft(self, world, items, stockpiles, buildings, bench):
         if not bench.craft_queue: return False
-        if bench.reserved_by is not None and bench.reserved_by != self.id: return False
+        if self._station_full(bench): return False
         task = bench.craft_queue[0]["item"]
-        need = ({"iron": 5} if task == "gun"
-                else {"iron": 3} if task in ("pistol", "longsword")
-        else {"stone": 2} if task == "stone_pickaxe"
-        else {"iron": 2})
+        need = craft_need(task)
 
         for k, v in need.items():
-            if bench.delivered_materials.get(k, 0) < v:
+            if not bench.craft_ready and bench.delivered_materials.get(k, 0) < v:
                 if self.carrying and self.carrying["kind"] == k:
                     adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
                     if adj:
@@ -595,7 +639,7 @@ class Colonist:
                             self._release_job()
                             self.path = p
                             self.job = {"type": "craft", "bench": bench, "stage": "deliver"}
-                            bench.reserved_by = self.id
+                            self._join_station(bench)
                             return True
                 src = self._find_material_source(items, stockpiles, buildings, {k: 1})
                 if src:
@@ -608,8 +652,10 @@ class Colonist:
                             self.path = p
                             self.job = {"type": "craft", "bench": bench, "stage": "to_material",
                                         "mat_src": (src_tx, src_ty), "mat_kind": src_kind, "cabinet": cab}
-                            bench.reserved_by = self.id
+                            self._join_station(bench)
                             return True
+                if any(w != self.id for w in bench.workers):
+                    break                    # 材料已被同伴搬走：直接去工作台帮忙（协作模式）
                 return False
         adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
         if adj:
@@ -617,8 +663,8 @@ class Colonist:
             if p is not None:
                 self._release_job()
                 self.path = p
-                self.job = {"type": "craft", "bench": bench, "stage": "to_bench"}
-                bench.reserved_by = self.id
+                self.job = {"type": "craft", "bench": bench, "stage": "deliver"}
+                self._join_station(bench)
                 return True
         return False
 
@@ -786,6 +832,15 @@ class Colonist:
         # 玩家指定战斗期间，不触发防卡死
         if self.combat_lock is not None:
             self.stuck_timer = 0.0
+        elif self.target_animal is not None and self.target_animal.hp > 0:
+            # 正在狩猎：站着挥拳/开枪本来就不会移动、也没有"工作进度"，旧逻辑 1.5 秒后把它当成卡死并取消目标
+            # （这就是"打猎打到一半停下"）。改为由 hunt_timer 兜底：追不上/够不着一只猎物太久才放弃。
+            self.stuck_timer = 0.0
+            self.hunt_timer += dt
+            if self.hunt_timer > self.HUNT_GIVE_UP:
+                self.target_animal = None
+                self.hunt_timer = 0.0
+                self.path = []
         elif not moved and not worked and self.state not in ("sleeping", "eating") and self.is_busy():
             self.stuck_timer += dt
         else:
@@ -873,6 +928,8 @@ class Colonist:
                         p = astar(world, self.current_tile(), adj)
                         if p is not None: self.path = p
 
+        if self.target_animal is None:
+            self.hunt_timer = 0.0
         if self.target_animal is not None:
             a = self.target_animal
             if a.hp <= 0:
@@ -894,13 +951,20 @@ class Colonist:
                             self.target_animal = None
                             if items:
                                 items.add(a.drop_item, a.drop_amount, *a.current_tile())
-                                if a.species == "deer": items.add("leather", 3, *a.current_tile())
+                                for dk, da in a.extra_drops.items(): items.add(dk, da, *a.current_tile())
                     return
-                elif not self.path:
-                    adj = self._find_adjacent(world, self.current_tile(), *a.current_tile())
-                    if adj:
-                        p = astar(world, self.current_tile(), adj)
-                        if p is not None: self.path = p
+                else:
+                    # 猎物会逃跑：路线很快就过期，所以追击时每 0.4 秒按猎物当前位置重新规划
+                    self.chase_timer -= dt
+                    if not self.path or self.chase_timer <= 0:
+                        self.chase_timer = 0.4
+                        adj = self._find_adjacent(world, self.current_tile(), *a.current_tile())
+                        if adj == self.current_tile():
+                            self.path = [a.current_tile()]   # 已在相邻格但还够不着：直接朝猎物所在格挪一步
+                            adj = None
+                        if adj:
+                            p = astar(world, self.current_tile(), adj)
+                            if p is not None: self.path = p
 
         if self.path:
             target_tx, target_ty = self.path[0]
@@ -928,25 +992,25 @@ class Colonist:
     def _on_arrive(self, world, items, buildings):
         if self.state == "going_to_eat":
             tx, ty, cab = self._eat_target
-            food_kind = None
-            if cab:
-                for k, amt in cab.inventory.items():
-                    if k in ("meal_fine", "meal_simple", "food", "meat") and amt > 0:
-                        food_kind = k
-                        cab.remove_item(k, 1)
-                        break
-            else:
-                stacks = items.get_at(tx, ty) if items else []
-                food_stack = next(
-                    (s for s in stacks if s.kind in ("food", "meat", "meal_simple", "meal_fine") and s.amount > 0),
-                    None)
-                if food_stack:
-                    food_kind = food_stack.kind
-                    food_stack.amount -= 1
-                    if food_stack.amount <= 0: items.remove_stack(tx, ty, food_stack.kind)
-            if not food_kind: self.state = None; return
-            self.state, self.state_timer = "eating", 0.8
-            self._apply_food_effect(food_kind)
+            ate = 0
+            for _ in range(8):                      # 一次吃到接近饱：每次挑当前格/柜子里营养最高的
+                if ate and self.satiety > 90: break
+                if cab:
+                    cands = [k for k, amt in cab.inventory.items() if k in FOOD_KINDS and amt > 0]
+                else:
+                    cands = [st.kind for st in (items.get_at(tx, ty) if items else []) if st.kind in FOOD_KINDS and st.amount > 0]
+                if not cands: break
+                food_kind = max(cands, key=lambda k: (ITEM_DEFS[k].get("nutrition", 0), k))
+                if cab:
+                    cab.remove_item(food_kind, 1)
+                else:
+                    st = next(x for x in items.get_at(tx, ty) if x.kind == food_kind and x.amount > 0)
+                    st.amount -= 1
+                    if st.amount <= 0: items.remove_stack(tx, ty, food_kind)
+                self._apply_food_effect(food_kind)
+                ate += 1
+            if not ate: self.state = None; return
+            self.state, self.state_timer = "eating", 0.8 * ate
             return
         if self.state == "going_to_sleep": self.state = "sleeping"
 
@@ -1033,8 +1097,7 @@ class Colonist:
                     avail = cabinet.inventory.get(kind, 0)
                     take_amt = min(avail, want_amt)
                     if cabinet.remove_item(kind, take_amt):
-                        equip_kinds = ("axe", "stone_pickaxe", "iron_pickaxe",
-                                       "longsword", "pistol", "rifle", "gun")
+                        equip_kinds = EQUIPPABLE
                         if kind in equip_kinds:
                             if kind in ("stone_pickaxe", "iron_pickaxe"):
                                 if self.tool_key:
@@ -1099,7 +1162,7 @@ class Colonist:
 
         elif jt == "harvest":
             if not world.is_harvestable(j["tx"], j["ty"]): self._release_job(); return
-            if world.get(j["tx"], j["ty"]) == T_IRON_ROCK and self.tool_key not in ("stone_pickaxe", "iron_pickaxe"):
+            if world.get(j["tx"], j["ty"]) in (T_IRON_ROCK, T_METEOR) and self.tool_key not in ("stone_pickaxe", "iron_pickaxe"):
                 self._release_job()
                 return
             self.work_progress += self.work_speed * dt
@@ -1108,10 +1171,15 @@ class Colonist:
                 dmg = 10
                 tool_def = get_weapon(self.tool_key) if self.tool_key else {"chop_bonus": False, "mine_bonus": False}
                 t = world.get(j["tx"], j["ty"])
-                if t == T_TREE and tool_def.get("chop_bonus"): dmg *= 2.5
-                if t in (T_ROCK, T_IRON_ROCK) and tool_def.get("mine_bonus"): dmg *= 2.5
+                if t == T_TREE:
+                    wd = self.get_weapon_def()
+                    cm = max(2.5 if tool_def.get("chop_bonus") else 1.0,
+                             wd.get("chop_mult", 2.5) if wd.get("chop_bonus") else 1.0)
+                    dmg *= cm
+                if t in (T_ROCK, T_IRON_ROCK, T_METEOR) and tool_def.get("mine_bonus"): dmg *= 2.5
                 done, kind, amt = world.damage_resource(j["tx"], j["ty"], int(dmg))
                 if done:
+                    if t == T_METEOR and items is not None: items.add("stone", 3, j["tx"], j["ty"])   # 陨石堆：铁矿 + 石头
                     if (j["tx"], j["ty"]) in self.ctx.designated_harvests:
                         self.ctx.designated_harvests.remove((j["tx"], j["ty"]))
                     if items is not None and kind is not None: items.add(kind, amt, j["tx"], j["ty"])
@@ -1168,19 +1236,19 @@ class Colonist:
                     self.work_progress = 0.0
                     tx, ty = j["mat_src"]
                     kind = j["mat_kind"]
-                    found = j["cabinet"].remove_item(kind, 1) if j.get("cabinet") else False
-                    if not j.get("cabinet"):
-                        for s in items.get_at(tx, ty):
-                            if s.kind == kind:
-                                s.amount -= 1
-                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
-                                found = True
-                                break
-                    if not found: self._release_job(); return
+                    di = stove.delivered_ingredients
+                    if all(q["meal"] == "meal_simple" for q in stove.cook_queue):
+                        want = 2 * len(stove.cook_queue) - sum(di.values())            # 简单食物：任意 2 份，整个队列一次备齐
+                    elif stove.cook_queue[0]["meal"] == "meal_simple":
+                        want = 2 - sum(di.values())
+                    else:
+                        want = 2 - di.get(kind, 0)                                     # 美味食物：这种食材还差几份
+                    got = self._take_stock(items, tx, ty, kind, j.get("cabinet"), want)
+                    if got <= 0: self._release_job(); return
                     if not self.carrying:
-                        self.carrying = {"kind": kind, "amount": 1}
+                        self.carrying = {"kind": kind, "amount": got}
                     elif self.carrying["kind"] == kind:
-                        self.carrying["amount"] += 1
+                        self.carrying["amount"] += got
                     else:
                         self._release_job()
                         return
@@ -1194,10 +1262,12 @@ class Colonist:
                     stove.delivered_ingredients[self.carrying["kind"]] = stove.delivered_ingredients.get(
                         self.carrying["kind"], 0) + self.carrying["amount"]
                     self.carrying = None
+                if True:    # 食材可能早就备齐了（一次搬了整个队列的量），没带东西也要判断
                     task = stove.cook_queue[0]
                     meal = task["meal"]
                     is_enough = (meal == "meal_simple" and sum(stove.delivered_ingredients.values()) >= 2) or \
-                                (meal == "meal_fine" and sum(stove.delivered_ingredients.values()) >= 4)
+                                (meal == "meal_fine" and stove.delivered_ingredients.get("meat", 0) >= 2
+                                 and stove.delivered_ingredients.get("food", 0) >= 2)
                     if is_enough:
                         j["stage"] = "cooking"
                         self.work_progress = 0.0
@@ -1222,8 +1292,6 @@ class Colonist:
                                     j["cabinet"] = cab
                                     return
                         self._release_job()
-                else:
-                    self._release_job()
             elif j["stage"] == "cooking":
                 self.work_progress += self.work_speed * dt
                 stove.cook_progress = self.work_progress
@@ -1250,7 +1318,7 @@ class Colonist:
                     self._find_storage_target(world, items, stockpiles, buildings, j)
                     return
             elif j["stage"] == "storing":
-                if not self.carrying: self._release_job(); return
+                if not self.carrying: self._next_cycle(world, items, stockpiles, buildings); return
                 if j.get("target_kind") == "cabinet":
                     b = j["target_obj"]
                     if b and not b.marked_for_deconstruction:
@@ -1260,7 +1328,7 @@ class Colonist:
                         b.reserved_by = None
                         if self.carrying and self.carrying["amount"] > 0: self._drop_food(items)
                         self.carrying = None
-                        self._release_job()
+                        self._next_cycle(world, items, stockpiles, buildings)
                     else:
                         if b: b.reserved_by = None
                         self._find_storage_target(world, items, stockpiles, buildings, j)
@@ -1268,19 +1336,16 @@ class Colonist:
                     tx, ty = j["target_pos"]
                     items.add(self.carrying["kind"], self.carrying["amount"], tx, ty)
                     self.carrying = None
-                    self._release_job()
+                    self._next_cycle(world, items, stockpiles, buildings)
                 else:
                     self._drop_food(items)
-                    self._release_job()
+                    self._next_cycle(world, items, stockpiles, buildings)
 
         elif jt == "craft":
             bench = j["bench"]
             if not bench.craft_queue or bench.marked_for_deconstruction: self._release_job(); return
             task = bench.craft_queue[0]["item"]
-            need = ({"iron": 5} if task == "gun"
-                    else {"iron": 3} if task in ("pistol", "longsword")
-            else {"stone": 2} if task == "stone_pickaxe"
-            else {"iron": 2})
+            need = craft_need(task)
 
             if j["stage"] == "to_material":
                 self.work_progress += self.work_speed * dt * 2
@@ -1288,19 +1353,19 @@ class Colonist:
                     self.work_progress = 0.0
                     tx, ty = j["mat_src"]
                     kind = j["mat_kind"]
-                    found = j["cabinet"].remove_item(kind, 1) if j.get("cabinet") else False
-                    if not j.get("cabinet"):
-                        for s in items.get_at(tx, ty):
-                            if s.kind == kind:
-                                s.amount -= 1
-                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
-                                found = True
-                                break
-                    if not found: self._release_job(); return
+                    # 一趟把"这件（以及队列里后面同类物品）还缺的这种材料"一次搬齐，而不是一个一个搬
+                    want = sum(craft_need(q["item"]).get(kind, 0) for q in bench.craft_queue) - bench.delivered_materials.get(kind, 0)
+                    got = self._take_stock(items, tx, ty, kind, j.get("cabinet"), want)
+                    if got <= 0:
+                        if any(w != self.id for w in bench.workers):      # 材料被同伴先搬走了：去工作台帮忙
+                            adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
+                            p = astar(world, self.current_tile(), adj) if adj else None
+                            if p is not None: self.path = p; j["stage"] = "deliver"; return
+                        self._release_job(); return
                     if not self.carrying:
-                        self.carrying = {"kind": kind, "amount": 1}
+                        self.carrying = {"kind": kind, "amount": got}
                     elif self.carrying["kind"] == kind:
-                        self.carrying["amount"] += 1
+                        self.carrying["amount"] += got
                     adj = self._find_adjacent(world, self.current_tile(), bench.tx, bench.ty)
                     if adj:
                         p = astar(world, self.current_tile(), adj)
@@ -1312,8 +1377,12 @@ class Colonist:
                         self.carrying["kind"], 0) + self.carrying["amount"]
                     self.carrying = None
                 is_enough = all(bench.delivered_materials.get(k, 0) >= v for k, v in need.items())
-                if is_enough:
+                if bench.craft_ready:                  # 同伴已经把材料投进去了：直接加入制作
+                    j["stage"] = "crafting"
+                    self.work_progress = 0.0
+                elif is_enough:
                     for k, v in need.items(): bench.delivered_materials[k] -= v
+                    bench.craft_ready = True
                     j["stage"] = "crafting"
                     self.work_progress = 0.0
                 else:
@@ -1335,17 +1404,20 @@ class Colonist:
                             self._release_job()
                             return
             elif j["stage"] == "crafting":
-                self.work_progress += self.work_speed * dt
-                bench.craft_progress = self.work_progress
-                if self.work_progress >= 150.0:
+                if not bench.craft_ready:              # 队首物品换了/材料还没投：回去走一遍交料流程
+                    j["stage"] = "deliver"
+                    return
+                bench.craft_progress += self.work_speed * dt      # 进度挂在工作台上：多人协作时大家的工作量叠加
+                self.work_progress += self.work_speed * dt        # 个人计数：防卡死检测靠它判断"在干活"
+                if bench.craft_progress >= 150.0:
                     bench.craft_queue.pop(0)
                     bench.craft_progress = 0.0
+                    bench.craft_ready = False
                     self.work_progress = 0.0
 
                     if task == "gun":
                         w_key = "pistol"
-                    elif task in ("axe", "iron_pickaxe", "stone_pickaxe",
-                                  "longsword", "pistol", "rifle"):
+                    elif task in WEAPONS:
                         w_key = task
                     else:
                         w_key = "pistol"
@@ -1371,11 +1443,12 @@ class Colonist:
                     else:
                         j["stage"] = "to_material"
                         j["materials"] = {}
-                        need = ({"iron": 5} if bench.craft_queue[0]["item"] == "gun"
-                                else {"iron": 3} if bench.craft_queue[0]["item"] in ("pistol", "longsword")
-                        else {"stone": 2} if bench.craft_queue[0]["item"] == "stone_pickaxe"
-                        else {"iron": 2})
-                        src = self._find_material_source(items, stockpiles, buildings, need)
+                        need = craft_need(bench.craft_queue[0]["item"])
+                        missing = {k: v for k, v in need.items() if bench.delivered_materials.get(k, 0) < v}
+                        if not missing:                      # 之前一次搬齐了：材料已经在工作台里，直接开下一件
+                            j["stage"] = "deliver"
+                            return
+                        src = self._find_material_source(items, stockpiles, buildings, missing)
                         if src:
                             src_tx, src_ty, src_kind, cab = src
                             adj = self._find_adjacent(world, self.current_tile(), src_tx, src_ty)
@@ -1401,25 +1474,18 @@ class Colonist:
 
         elif jt == "smelt":
             furnace = j["furnace"]
-            if not furnace.smelt_queue or furnace.marked_for_deconstruction: self._release_job(); return
+            if j["stage"] != "storing" and (not furnace.smelt_queue or furnace.marked_for_deconstruction): self._release_job(); return
 
             if j["stage"] == "to_material":
                 self.work_progress += self.work_speed * dt * 2
                 if self.work_progress >= 10.0:
                     self.work_progress = 0.0
                     tx, ty = j["mat_src"]
-                    found = j["cabinet"].remove_item("iron_ore", 2) if j.get("cabinet") else False
-                    if not j.get("cabinet"):
-                        cnt = 0
-                        for s in items.get_at(tx, ty):
-                            if s.kind == "iron_ore" and cnt < 2:
-                                take = min(s.amount, 2 - cnt)
-                                s.amount -= take
-                                cnt += take
-                                if s.amount <= 0: items.remove_stack(tx, ty, s.kind)
-                        found = cnt > 0
-                    if not found: self._release_job(); return
-                    if not self.carrying: self.carrying = {"kind": "iron_ore", "amount": 2}
+                    want = 2 * len(furnace.smelt_queue) - furnace.inventory.get("iron_ore", 0)   # 整个队列要的粗铁一次搬齐（受搬运上限）
+                    got = self._take_stock(items, tx, ty, "iron_ore", j.get("cabinet"), max(2, want))
+                    if got <= 0: self._release_job(); return
+                    if not self.carrying: self.carrying = {"kind": "iron_ore", "amount": got}
+                    elif self.carrying["kind"] == "iron_ore": self.carrying["amount"] += got
                     adj = self._find_adjacent(world, self.current_tile(), furnace.tx, furnace.ty)
                     if adj:
                         p = astar(world, self.current_tile(), adj)
@@ -1446,6 +1512,29 @@ class Colonist:
                     j["stage"] = "storing"
                     self._find_storage_target(world, items, stockpiles, buildings, j)
 
+            elif j["stage"] == "storing":
+                if not self.carrying: self._next_cycle(world, items, stockpiles, buildings); return
+                if j.get("target_kind") == "cabinet":
+                    b = j["target_obj"]
+                    if b and not b.marked_for_deconstruction:
+                        space = b.capacity - b.inventory.get(self.carrying["kind"], 0)
+                        put_amt = min(self.carrying["amount"], space)
+                        if put_amt > 0: b.add_item(self.carrying["kind"], put_amt); self.carrying["amount"] -= put_amt
+                        b.reserved_by = None
+                        if self.carrying and self.carrying["amount"] > 0: self._drop_food(items)
+                        self.carrying = None
+                        self._next_cycle(world, items, stockpiles, buildings)
+                    else:
+                        if b: b.reserved_by = None
+                        self._find_storage_target(world, items, stockpiles, buildings, j)
+                elif j.get("target_kind") == "ground":
+                    tx, ty = j["target_pos"]
+                    items.add(self.carrying["kind"], self.carrying["amount"], tx, ty)
+                    self.carrying = None
+                    self._next_cycle(world, items, stockpiles, buildings)
+                else:
+                    self._drop_food(items)
+                    self._next_cycle(world, items, stockpiles, buildings)
         elif jt == "haul":
             if j["stage"] == "to_src":
                 self.work_progress += self.work_speed * dt * 2
@@ -1675,9 +1764,11 @@ class Colonist:
                 bldg_key = "stove" if self.job["type"] == "cook" else (
                     "bench" if self.job["type"] == "craft" else "furnace")
                 bldg = self.job.get(bldg_key)
-                if bldg and bldg.reserved_by == self.id: bldg.reserved_by = None
+                if bldg and self.job["type"] == "craft":
+                    self._leave_station(bldg)
+                    if not bldg.workers: bldg.craft_progress = 0.0     # 还有别人在做就保留共同进度
+                elif bldg and bldg.reserved_by == self.id: bldg.reserved_by = None
                 if bldg and hasattr(bldg, "cook_progress"): bldg.cook_progress = 0.0
-                if bldg and hasattr(bldg, "craft_progress"): bldg.craft_progress = 0.0
                 if self.job.get("stage") == "storing":
                     b = self.job.get("target_obj")
                     if b and b.reserved_by == self.id: b.reserved_by = None
@@ -1694,8 +1785,7 @@ class Colonist:
             elif self.job.get("type") == "research":
                 tx, ty = self.job["tx"], self.job["ty"]
                 if self.ctx.buildings:
-                    b = self.ctx.buildings.get_building_at(tx, ty)
-                    if b and b.reserved_by == self.id: b.reserved_by = None
+                    self._leave_station(self.ctx.buildings.get_building_at(tx, ty))
             # 通用兜底：任何任务在"存放"阶段占着的目标柜子，被打断时都要放手。
             # 以前只有 cook/craft/smelt 会放，"取物"等任务被打断后柜子会永远处于被占用状态，
             # 导致别人既存不进东西、也取不出食物。
@@ -1719,9 +1809,14 @@ class Colonist:
         sx, sy = camera.world_to_screen(self.x, self.y)
         if self.selected: pygame.draw.circle(surface, SELECT, (int(sx), int(sy)), self.radius + 6, 2)
         draw_weapon(surface, sx, sy, self.facing_angle, self.get_weapon_def(), 1.0)
-        pygame.draw.circle(surface, (255, 200, 100) if self.hit_flash > 0 else self.color, (int(sx), int(sy)),
-                           self.radius)
-        pygame.draw.circle(surface, (0, 0, 0), (int(sx), int(sy)), self.radius, 2)
+        pimg = textures.person(f"colonist_{self.gender}_body", f"colonist_{self.gender}_head_{self.id % 3}",
+                               self.color, self.hit_flash > 0, self.facing_angle)
+        if pimg is not None:
+            surface.blit(pimg, (int(sx - pimg.get_width() / 2), int(sy - pimg.get_height() / 2)))
+        else:
+            pygame.draw.circle(surface, (255, 200, 100) if self.hit_flash > 0 else self.color, (int(sx), int(sy)),
+                               self.radius)
+            pygame.draw.circle(surface, (0, 0, 0), (int(sx), int(sy)), self.radius, 2)
         pygame.draw.rect(surface, (60, 0, 0), (int(sx - self.radius), int(sy - self.radius - 10), self.radius * 2, 4))
         pygame.draw.rect(surface, (60, 200, 60), (int(sx - self.radius), int(sy - self.radius - 10),
                                                   int((self.radius * 2) * (self.hp / self.max_hp)), 4))
@@ -1730,8 +1825,12 @@ class Colonist:
         if self.carrying:
             c_kind = self.carrying["kind"]
             c_color = ITEM_DEFS.get(c_kind, {"color": (200, 200, 200)})["color"]
-            pygame.draw.rect(surface, c_color, (sx + self.radius, sy - self.radius - 6, 14, 14))
-            pygame.draw.rect(surface, (0, 0, 0), (sx + self.radius, sy - self.radius - 6, 14, 14), 1)
+            c_ic = textures.icon(c_kind, 18)
+            if c_ic is not None:
+                surface.blit(c_ic, (sx + self.radius, sy - self.radius - 8))
+            else:
+                pygame.draw.rect(surface, c_color, (sx + self.radius, sy - self.radius - 6, 14, 14))
+                pygame.draw.rect(surface, (0, 0, 0), (sx + self.radius, sy - self.radius - 6, 14, 14), 1)
             surface.blit(font.render(str(self.carrying["amount"]), True, WHITE),
                          (sx + self.radius + 16, sy - self.radius - 10))
 

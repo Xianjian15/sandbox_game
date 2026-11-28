@@ -21,6 +21,25 @@ _MSG_LAYER = uis.UiLayer(alpha=False)
 _CONFIRM_LAYER = uis.UiLayer(alpha=True)
 
 
+FORCE_TOUCH = False
+
+
+def _load_input_mode():
+    try:
+        with open(data_file("input.json"), "r", encoding="utf-8") as f:
+            return json.load(f).get("mode") == "touch"
+    except Exception:                                                    # noqa: BLE001
+        return False
+
+
+def _save_input_mode(touch_on):
+    try:
+        with open(data_file("input.json"), "w", encoding="utf-8") as f:
+            json.dump({"mode": "touch" if touch_on else "pc"}, f)
+    except Exception:                                                    # noqa: BLE001
+        pass
+
+
 def change_ui_pref(delta):
     """调整并保存界面大小偏好，返回新的偏好值。"""
     UI_STATE["pref"] = uis.step_pref(UI_STATE["pref"], delta)
@@ -32,15 +51,16 @@ DEBUG_BUSY = os.environ.get("RW_DEBUG") == "1"      # 设环境变量 RW_DEBUG=1
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="RimWorld-like 沙盒（支持局域网 2~4 人联机）")
+    ap = argparse.ArgumentParser(description="RimWorld-like 沙盒（支持局域网 2~6 人联机）")
     ap.add_argument("--host", nargs="?", const=DEFAULT_PORT, type=int, metavar="PORT",
                     help=f"作为主机开一局联机游戏（默认端口 {DEFAULT_PORT}）")
     ap.add_argument("--join", metavar="IP[:PORT]", help="加入主机的联机游戏，例如 192.168.1.5 或 192.168.1.5:47777")
-    ap.add_argument("--players", type=int, default=2, choices=range(2, 5), metavar="N",
-                    help="（主机，配合 --host）凑够 N 人（2~4，含自己）自动开始，默认 2")
+    ap.add_argument("--players", type=int, default=2, choices=range(2, 7), metavar="N",
+                    help="（主机，配合 --host）凑够 N 人（2~6，含自己）自动开始，默认 2")
     ap.add_argument("--name", metavar="用户名", help="（命令行直连时）临时使用的用户名；平时在菜单「个人资料」里设置")
     ap.add_argument("--delay", type=int, default=4, help="联机输入延迟（回合数，默认 4；网络差就调大）")
     ap.add_argument("--seed", type=int, default=42, help="（主机）地图/随机种子")
+    ap.add_argument("--touch", action="store_true", help="强制使用触屏操作模式（平时在游戏菜单 M 里切换，会被记住）")
     return ap.parse_args()
 
 
@@ -90,7 +110,7 @@ def draw_confirm(screen, font, online, scale=1.0):
     _CONFIRM_LAYER.end(screen_real)
 
 
-def play(screen, clock, fonts, session, seed, show_tutorial=False):
+def play(screen, clock, fonts, session, seed, show_tutorial=False, profile=None):
     """开一局游戏（单机或联机），直到玩家关窗口或选择返回主菜单。返回 ("quit"/"menu", screen)。"""
     font, font_big, font_small, font_warn = fonts["normal"], fonts["big"], fonts["small"], fonts["warn"]
     if session is not None:
@@ -103,7 +123,11 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False):
         game.set_profiles(session.roster)          # 顶部玩家栏 + 小人头顶的用户名
     else:
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)
+        if profile is not None:
+            game.apply_genders([profile.gender])           # 单人：自己选的性别
     game.ui_pref = UI_STATE["pref"]
+    game.touch.on_change = lambda on: _save_input_mode(on)
+    game.touch.set_enabled(_load_input_mode() or FORCE_TOUCH, notify=False)      # 记住上次的操作模式（--touch 强制触屏）
     game.tutorial.on_close = lambda: tutorial.mark_seen(data_file)      # 看过一次后不再自动弹出（F1 随时可开）
     if show_tutorial or not tutorial.has_seen(data_file):
         game.tutorial.open()
@@ -163,7 +187,15 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False):
                 screen_w, screen_h = event.w, event.h
                 game.set_screen_size(screen_w, screen_h)
 
+            if event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+                game.touch.handle(event, screen_w, screen_h)         # 手指事件：触屏模式下翻译成鼠标/键盘操作
+                continue
+            if game.touch.enabled and event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION) \
+                    and getattr(event, "touch", False):
+                continue                                              # 系统为触摸合成的鼠标事件：触屏模式下忽略，避免重复
             game.handle_event(event, screen_w, screen_h)
+
+        game.touch.update(screen_w, screen_h)                         # 触屏长按判定
 
         # 游戏菜单发来的请求（只有 main 能改窗口 / 退出）
         req, game.app_request = game.app_request, None
@@ -269,6 +301,8 @@ def window_title():
 
 def main():
     args = parse_args()
+    global FORCE_TOUCH
+    FORCE_TOUCH = bool(args.touch)
     pygame.init()
     set_window_icon()                      # 要在 set_mode 之前，部分系统才会生效
     screen = pygame.display.set_mode((INIT_W, INIT_H), pygame.RESIZABLE)
@@ -307,7 +341,7 @@ def main():
         if choice["mode"] == "quit":
             break
         session = choice.get("session")             # 单机为 None
-        leave, screen = play(screen, clock, fonts, session, args.seed, show_tutorial=bool(choice.get("tutorial")))
+        leave, screen = play(screen, clock, fonts, session, args.seed, show_tutorial=bool(choice.get("tutorial")), profile=profile)
         if leave == "quit":
             break
         pygame.display.set_caption(window_title())

@@ -63,6 +63,9 @@ def part_b():
     # 右键移动：UI 路径只会带自己的 id
     p0.camera.center_on(mine0.x, mine0.y) if hasattr(p0.camera, "center_on") else None
     tx, ty = mine0.current_tile()[0] + 5, mine0.current_tile()[1]
+    for dx_, dy_ in ((5, 0), (4, 0), (6, 0), (0, 5), (-5, 0), (0, -5), (3, 3)):      # 找一个可走的目标格（地图改大后原位置可能是树）
+        if p0.world.is_walkable(mine0.current_tile()[0] + dx_, mine0.current_tile()[1] + dy_):
+            tx, ty = mine0.current_tile()[0] + dx_, mine0.current_tile()[1] + dy_; break
     sx, sy = p0.camera.world_to_screen(tx * TILE_SIZE + 16, ty * TILE_SIZE + 16)
     p0._handle_right_click((sx, sy), False)
     moves = [c for c in p0.cmd_outbox if c["t"] == "move"]

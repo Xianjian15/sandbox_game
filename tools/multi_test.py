@@ -4,6 +4,7 @@
 
 场景：
   M1 四人联机      每人随机发指令，加随机卡顿；全程一致，每人的指令都被所有人执行
+  M9 满员联机      MAX_PLAYERS 人长跑，两人中途掉线，其余仍一致
   M2 中途掉线      三人局里一位客户端突然断开；其余两人继续运行并保持一致
   M3 玩家卡死      一位客户端不再响应；主机超时把他请出去，其余人继续
   M4 三人分叉检测  一位客户端偷偷改状态；三个人都要报告"失去同步"
@@ -144,6 +145,27 @@ def m1_four():
     close_all(peers); return ok, info
 
 
+def m9_max_players():
+    """满员（MAX_PLAYERS 人）：长跑一致；每人指令都被执行；其中两人断线其余仍一致。"""
+    n = S.MAX_PLAYERS
+    peers = lobby(n)
+    flag = {}
+
+    def hook(i, s, g):
+        if i == 0 and g.turn == 700 and not flag:
+            flag["x"] = 1
+            peers[n - 1][0].conns[0].sock.close()
+            peers[n - 2][0].conns[0].sock.close()
+    run(peers, 1800, lag={1: 0.2, 2: 0.4, n - 1: 0.1}, hook=hook, skip=())
+    alive = [p for k, p in enumerate(peers) if k < n - 2]
+    hs = {g.state_hash() for _, g in alive}
+    who = {p for _, p, _ in alive[0][1].applied}
+    ok = len(hs) == 1 and all(s.state == "running" for s, _ in alive) and all(g.turn == 1800 for _, g in alive) \
+        and set(range(n - 2)) <= who and {n - 1, n - 2} <= set(alive[0][0].dropped)
+    info = f"人数={n} 存活={len(alive)} 哈希种类={len(hs)} 发令玩家={sorted(who)} dropped={sorted(alive[0][0].dropped)}"
+    close_all(peers); return ok, info
+
+
 def m2_drop():
     peers = lobby(3)
     flag = {}
@@ -273,7 +295,7 @@ def m8_host_quits():
 def main():
     plan = [("M1 四人联机(随机卡顿)", m1_four), ("M2 中途掉线", m2_drop), ("M3 玩家卡死被踢", m3_stall),
             ("M4 三人分叉检测", m4_desync), ("M5 房间已满", m5_full), ("M6 大厅进出/开局", m6_lobby),
-            ("M7 越权指令被踢", m7_illegal), ("M8 主机退出", m8_host_quits)]
+            ("M7 越权指令被踢", m7_illegal), ("M8 主机退出", m8_host_quits), ("M9 满员(MAX_PLAYERS)长跑+掉线", m9_max_players)]
     allok = True
     for name, fn in plan:
         t0 = time.time()

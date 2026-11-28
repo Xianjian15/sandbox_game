@@ -26,7 +26,7 @@ from ui.toolbar import Toolbar
 from ui.research_menu import ResearchMenu
 from entities.colonist import Colonist
 from entities.enemy import Enemy
-from entities.animal import Animal
+from entities.animal import Animal, pick_species
 from combat.effects import Shot, MeleeHit, CombatLog
 from systems.research import ResearchManager
 from world.rooms import RoomManager
@@ -83,6 +83,10 @@ class GameWorld:
         self.native_size = (screen_w, screen_h)
         self.ui_layer = UiLayer(alpha=True)
         self.toast_text, self.toast_timer = "", 0.0
+        self.pointer_pos = None            # 触屏模式：手指位置（代替真实鼠标位置）
+        self.touch_shift = False           # 触屏"排队"开关：等价于按住 Shift
+        from core.touch import TouchAdapter
+        self.touch = TouchAdapter(self)
         self._update_ui_scale(screen_w, screen_h)
 
         # —— 指令系统：UI 不直接改模拟状态，一律 issue(指令) ——
@@ -133,10 +137,11 @@ class GameWorld:
                 if not found: found = (bx, base_y)
                 c = Colonist(*found, weapon_key="fist", ctx=self.ctx)
                 c.owner_id = pl
+                c.gender = "male" if k % 2 == 0 else "female"        # 默认男女交替；玩家在资料页选了性别后由 apply_genders 覆盖
                 self.colonists.append(c)
 
         spawn_attempts = 0
-        while len(self.animals) < 15 and spawn_attempts < 200:
+        while len(self.animals) < self.INITIAL_ANIMALS and spawn_attempts < 800:
             spawn_attempts += 1
             ax, ay = self.rng.randint(5, MAP_WIDTH - 5), self.rng.randint(5, MAP_HEIGHT - 5)
             if self.world.is_walkable(ax, ay):
@@ -145,10 +150,18 @@ class GameWorld:
                     if not self.world.is_walkable(ax + dx, ay + dy):
                         is_safe = False; break
                 if is_safe:
-                    self.animals.append(Animal(ax, ay, self.rng.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
+                    self.animals.append(Animal(ax, ay, pick_species(self.rng), ctx=self.ctx))
 
         self.animal_respawn_timer = 10.0
-        self.MAX_ANIMALS = 20
+        self.meteor_timer = self.game_time.day_length_sec * 2.5       # 第 3 天前后第一次陨石
+        self.meteors_spawned = 0
+        from systems.quests import QuestManager
+        self.quests = QuestManager(self.game_time.day_length_sec)    # 支线任务
+        self.show_quests = True
+        self.quest_rect = None
+        self.herd_timer = self.game_time.day_length_sec * 1.5      # 兽群迁徙
+        self.herds_spawned = 0
+        self.MAX_ANIMALS = self.MAX_ANIMALS_CAP
         self.enemy_invasion_timer = self.game_time.day_length_sec * 3
         self.waves_spawned = 0
 
@@ -218,10 +231,20 @@ class GameWorld:
 
     OWNER_COLORS = PLAYER_COLORS
 
+    def apply_genders(self, genders):
+        """genders[i] = 玩家 i 选的性别（"male"/"female"）。该玩家第一个小人是他的角色，其余男女交替。
+        只改外观（gender 不进状态哈希），所以各端即使不一致也不会造成不同步。"""
+        for pl, g in enumerate(genders):
+            mine = [c for c in self.colonists if c.owner_id == pl]
+            other = "female" if g == "male" else "male"
+            for i, c in enumerate(mine):
+                c.gender = g if i % 2 == 0 else other
+
     def set_profiles(self, roster):
         """联机开局后由 main 调用：roster = [{"name","av"(base64 或 None)}]，按玩家编号排列。"""
-        from core.profile import decode_avatar
+        from core.profile import decode_avatar, gender_from_wire
         from ui.avatar import make_avatar_surface
+        self.apply_genders([gender_from_wire(r.get("g")) for r in (roster or [])])
         self.player_profiles = []
         for i, r in enumerate(roster or []):
             col = self.OWNER_COLORS[i % len(self.OWNER_COLORS)]
@@ -240,11 +263,14 @@ class GameWorld:
     def _draw_player_bar(self, surface):
         """界面上方（时间信息行下面）列出所有玩家的头像和用户名；自己标"我"，已离开的变灰。"""
         x, y = 10, 40
+        limit = surface.get_width() - 190          # 右上角是资源显示，玩家栏不要伸过去；人多时自动换行
         for i, pr in enumerate(self.player_profiles):
             gone = i in self.gone_players
             label = pr["name"] + (" (我)" if i == self.local_player else "") + (" (已离开)" if gone else "")
             txt = self.font.render(label, True, (150, 150, 150) if gone else (255, 255, 255))
             w = 32 + 10 + txt.get_width() + 12
+            if x > 10 and x + w > limit:
+                x, y = 10, y + 42
             panel = pygame.Surface((w, 38), pygame.SRCALPHA)
             panel.fill((20, 20, 28, 170))
             surface.blit(panel, (x, y))
@@ -303,9 +329,18 @@ class GameWorld:
         self._update_ui_scale(*self.native_size)
         self.toast_text, self.toast_timer = pref_text(pref), 1.5
 
+    def toast(self, text, secs=2.5):
+        self.toast_text, self.toast_timer = text, secs
+
+    def _mouse(self):
+        """当前指针位置：触屏模式用手指位置，否则用真实鼠标。"""
+        return self.pointer_pos if self.pointer_pos is not None else pygame.mouse.get_pos()
+
     def is_mouse_in_ui(self, mouse_pos):
         """mouse_pos 是窗口坐标（pygame.mouse.get_pos()）。"""
         mouse_pos = self._L(mouse_pos)
+        if self.touch.over_toolbar(mouse_pos): return True
+        if self.quest_rect is not None and self.quest_rect.collidepoint(mouse_pos): return True
         selected_cols = self.selected_colonists()
         self._place_hud()
         if self.hud.panel_rect.collidepoint(mouse_pos) and selected_cols: return True
@@ -373,8 +408,8 @@ class GameWorld:
         self._update_ui_scale(screen_w, screen_h)
         lw, lh = self.ui_w, self.ui_h                       # 界面逻辑尺寸
         lpos = self._L(event.pos) if hasattr(event, "pos") else None     # 事件位置的界面逻辑坐标
-        mouse_pos = pygame.mouse.get_pos()
-        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+        mouse_pos = self._mouse()
+        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT) or self.touch_shift
         mouse_in_ui = self.is_mouse_in_ui(mouse_pos)
 
         if event.type == pygame.VIDEORESIZE:
@@ -389,6 +424,7 @@ class GameWorld:
 
         if self.menu.active:                                # 菜单打开时：吞掉所有输入（含鼠标移动、滚屏、拖拽）
             self.menu.ui_pref_text = pref_text(self.ui_pref).replace("界面大小 ", "")
+            self.menu.input_text = "触屏" if self.touch.enabled else "电脑"
             act = None
             if event.type == pygame.KEYDOWN:
                 act = self.menu.handle_key(event.key)
@@ -441,6 +477,12 @@ class GameWorld:
             return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            qr = self.quest_rect
+            if qr is not None and qr.collidepoint(lpos):
+                if lpos[1] < qr.y + 24:
+                    self.show_quests = not self.show_quests          # 点标题栏收起/展开
+                self.left_down_pos = None
+                return
             selected_cols = self.selected_colonists()
             if self.hud.handle_click(lpos, selected_cols):
                 self.left_down_pos = None; return
@@ -519,8 +561,8 @@ class GameWorld:
 
     def edge_scroll(self, mouse_pos, screen_w, screen_h, dt_raw, edge_margin=20):
         """鼠标贴着窗口边缘时滚动视角（纯 UI，用真实时间）。菜单/教程打开时不滚——移动鼠标不会让地图动。"""
-        if self.menu.active or self.tutorial.active or self.is_mouse_in_ui(mouse_pos):
-            return
+        if self.touch.enabled or self.menu.active or self.tutorial.active or self.is_mouse_in_ui(mouse_pos):
+            return                                          # 触屏模式没有鼠标，不做边缘滚屏
         v = 600 * dt_raw
         if mouse_pos[0] < edge_margin: self.camera.move_by(-v, 0)
         elif mouse_pos[0] > screen_w - edge_margin: self.camera.move_by(v, 0)
@@ -534,6 +576,8 @@ class GameWorld:
             self.menu.close(); self.tutorial.open()
         elif act == "help":
             self.menu.close(); self.show_help = True
+        elif act == "input":
+            self.touch.toggle()                 # 电脑 ↔ 触屏；菜单保持打开
         else:
             self.app_request = act            # fullscreen / menu / quit / ui_plus / ui_minus：由 main 处理
             if act not in ("ui_plus", "ui_minus"):
@@ -565,6 +609,8 @@ class GameWorld:
             return
         if event.key == pygame.K_h:
             self.show_help = not self.show_help; return
+        if event.key == pygame.K_q:
+            self.show_quests = not self.show_quests; return
         if event.key == pygame.K_t:
             self.show_beauty = not self.show_beauty; return
         if event.key == pygame.K_b:
@@ -598,14 +644,21 @@ class GameWorld:
         for c in selected:
             c._release_job(); c.queue.clear(); c.state = None
             c.target_enemy = None; c.target_animal = None
-        # 设施还被别的小人占着：让对方放手，避免两人同时用
-        if station.reserved_by is not None and station.reserved_by != selected[0].id:
+        # 单人模式（烹饪台/熔炉恒为单人；研究台/工作台可切换）：新指令抢占，让原来的人放手，避免两人同时用
+        # 协作模式：不抢占，人数没满就加入（研究进度叠加 / 共同制造同一件），满员则拒绝
+        if not station.team:
+            holders = set(station.workers)
+            if station.reserved_by is not None: holders.add(station.reserved_by)
             for c2 in self.colonists:
-                if c2.id == station.reserved_by:
-                    c2._release_job(); break
+                if c2.id in holders and c2 not in selected: c2._release_job()
             station.reserved_by = None
-        if not assign(selected[0]):
-            self.log.add(fail_msg, (255, 100, 100))
+        group = station.kind in ("research_bench", "workbench")
+        ok = False
+        for c in (selected if group else selected[:1]):
+            ok = bool(assign(c)) or ok
+        if not ok:
+            self.log.add(fail_msg if not group or not station.team else "这个工作站已满员（可在它的面板里调整协作人数）",
+                         (255, 100, 100))
 
     def _handle_right_click(self, pos, shift_held):
         """右键：这里只做"点到了什么"的判断（纯 UI），然后发出一条指令。
@@ -659,8 +712,8 @@ class GameWorld:
             self.issue(cmdlib.make("build", ids=ids, tx=tx, ty=ty, q=q))
 
         elif hit_item is not None:
-            equip_kinds = ["axe", "stone_pickaxe", "iron_pickaxe", "longsword",
-                           "gun", "pistol", "rifle"]
+            from combat.weapons import EQUIPPABLE
+            equip_kinds = list(EQUIPPABLE) + ["stone_pickaxe", "iron_pickaxe"]
             if hit_item.kind in equip_kinds:
                 self.issue(cmdlib.make("equip", ids=ids, tx=tx, ty=ty, kind=hit_item.kind, q=q))
             else:
@@ -737,7 +790,7 @@ class GameWorld:
             self.drag_end = None
 
     def _handle_selection(self, event, screen_w, screen_h, shift_held):
-        self.selection.handle_event(event, self.camera, pygame.mouse.get_pos())
+        self.selection.handle_event(event, self.camera, self._mouse())
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             self.left_down_pos = event.pos
             self.left_drag_moved = False
@@ -879,12 +932,78 @@ class GameWorld:
         ["spear", "axe"],            # 2
         ["axe", "pistol"],           # 3
         ["pistol", "longsword"],     # 4
-        ["longsword", "rifle"],      # 5+
+        ["longsword", "rifle"],      # 5
+        ["rifle", "machete"],        # 6
+        ["machete", "shotgun", "war_hammer"],   # 7
+        ["shotgun", "smg", "war_hammer"],       # 8
+        ["smg", "sniper", "shotgun"],           # 9+
     ]
 
     def enemy_cap(self):
         """单波敌人数上限：联机=玩家总数；单人=3（装备另行削弱）。"""
         return max(1, self.num_players) if self.num_players > 1 else self.SOLO_ENEMY_CAP
+
+    INITIAL_ANIMALS = 40
+    MAX_ANIMALS_CAP = 55
+    METEOR_MIN_DIST = 40            # 陨石落点距任何小人至少这么多格（取不到就取"最远的候选点"）
+
+    def _spawn_meteor(self):
+        """陨石坠落：在远离所有小人的地方生成一堆陨石（铁矿 + 石头）。只用 self.rng，两端一致。"""
+        from world.world import T_METEOR, WALKABLE, RESOURCE_MAX_HP
+        pts = [c.current_tile() for c in self.colonists if c.hp > 0] or [(MAP_WIDTH // 2, MAP_HEIGHT // 2)]
+        best, bd = None, -1
+        for _ in range(60):
+            tx, ty = self.rng.randint(10, MAP_WIDTH - 10), self.rng.randint(10, MAP_HEIGHT - 10)
+            if self.world.get(tx, ty) not in WALKABLE: continue
+            d = min(abs(tx - px) + abs(ty - py) for px, py in pts)
+            if d > bd: best, bd = (tx, ty), d
+            if d >= self.METEOR_MIN_DIST * 1.5: break
+        if best is None:
+            self.meteor_timer = self.game_time.day_length_sec * 0.5
+            return
+        cx, cy = best
+        n = 0
+        for y in range(cy - 2, cy + 3):
+            for x in range(cx - 2, cx + 3):
+                if self.world.get(x, y) not in WALKABLE: continue
+                if self.buildings.get_building_at(x, y) is not None: continue
+                dd = (x - cx) ** 2 + (y - cy) ** 2
+                if dd == 0 or (dd <= 5 and self.rng.random() < 0.75) or (dd <= 8 and self.rng.random() < 0.3):
+                    self.world.tiles[y][x] = T_METEOR
+                    self.world.resource_hp[(x, y)] = RESOURCE_MAX_HP[T_METEOR]
+                    n += 1
+        self.meteors_spawned += 1
+        mx = sum(p[0] for p in pts) / len(pts); my = sum(p[1] for p in pts) / len(pts)
+        ns = "北" if cy < my - 8 else "南" if cy > my + 8 else ""
+        ew = "西" if cx < mx - 8 else "东" if cx > mx + 8 else ""
+        msg = f"陨石坠落！在殖民地{ns}{ew or ''}方 ({cx},{cy}) 附近形成了陨石堆（需要镐才能采集）"
+        self.log.add(msg, (255, 180, 80))
+        self.warning_text = msg
+        self.warning_timer = 4.0
+
+    def _spawn_herd(self):
+        """兽群迁徙：一群同种动物从地图边缘出现，给猎人送肉送皮。只用 self.rng。"""
+        from entities.animal import SPECIES
+        species = self.rng.choice(["rabbit", "deer", "sheep", "chicken", "boar", "fox", "deer", "sheep"])
+        want = self.rng.randint(5, 8)
+        side = self.rng.choice(["北", "南", "西", "东"])
+        for _try in range(40):
+            if side in ("北", "南"):
+                bx, by = self.rng.randint(8, MAP_WIDTH - 9), (5 if side == "北" else MAP_HEIGHT - 6)
+            else:
+                bx, by = (5 if side == "西" else MAP_WIDTH - 6), self.rng.randint(8, MAP_HEIGHT - 9)
+            if self.world.is_walkable(bx, by): break
+        else:
+            return
+        n = 0
+        for _ in range(want * 6):
+            if n >= want: break
+            x, y = bx + self.rng.randint(-3, 3), by + self.rng.randint(-3, 3)
+            if self.world.is_walkable(x, y):
+                self.animals.append(Animal(x, y, species, ctx=self.ctx)); n += 1
+        if n:
+            self.herds_spawned += 1
+            self.log.add(f"兽群迁徙：{n} 只{SPECIES[species]['name']}出现在地图{side}侧（适合狩猎）", (200, 230, 150))
 
     def threat_level(self):
         lvl = (self.game_time.day - 1) // 2 + self.waves_spawned
@@ -947,6 +1066,7 @@ class GameWorld:
             e.update(dt, self.world, self.colonists, self.buildings)
         for a in self.animals:
             a.update(dt, self.world, self.colonists)
+        self.quests.animals_killed += sum(1 for a in self.animals if a.hp <= 0)
         self.animals = [a for a in self.animals if a.hp > 0]
 
         self.animal_respawn_timer -= dt
@@ -960,8 +1080,18 @@ class GameWorld:
                         if not self.world.is_walkable(ax + dx, ay + dy):
                             is_safe = False; break
                     if is_safe:
-                        self.animals.append(Animal(ax, ay, self.rng.choice(["rabbit", "rabbit", "deer", "deer", "deer"]), ctx=self.ctx))
+                        self.animals.append(Animal(ax, ay, pick_species(self.rng), ctx=self.ctx))
                         break
+
+        self.meteor_timer -= dt
+        if self.meteor_timer <= 0:
+            self.meteor_timer = self.game_time.day_length_sec * self.rng.uniform(3.0, 5.0)
+            self._spawn_meteor()
+
+        self.herd_timer -= dt
+        if self.herd_timer <= 0:
+            self.herd_timer = self.game_time.day_length_sec * self.rng.uniform(2.5, 4.5)
+            self._spawn_herd()
 
         self.enemy_invasion_timer -= dt
         if self.enemy_invasion_timer <= 0:
@@ -996,12 +1126,14 @@ class GameWorld:
         for e in self.enemies:
             if e.hp <= 0:
                 self.log.add(f"{e.name} 被击杀", (100, 255, 100))
+                self.quests.enemies_killed += 1
         self.enemies = [e for e in self.enemies if e.hp > 0]
+        self.quests.update(self)
 
     def draw(self, surface, dt_raw):
         screen_w, screen_h = surface.get_size()
         self._update_ui_scale(screen_w, screen_h)
-        mouse_pos = pygame.mouse.get_pos()
+        mouse_pos = self._mouse()
         lmouse = self._L(mouse_pos)
 
         surface.fill(BLACK)
@@ -1133,6 +1265,8 @@ class GameWorld:
             y0 += 24
 
         self.log.draw(surface, self.font, screen_w, screen_h)
+        from ui import quest_hud
+        quest_hud.draw(surface, self.font, self)
 
         if self.mode == "build":
             self.build_menu.draw(surface, screen_w, screen_h, screen_h - self.toolbar.height,
@@ -1212,6 +1346,8 @@ class GameWorld:
             surface.blit(help_surf, (screen_w // 2 - 300, screen_h // 2 - 240))
 
         self.menu.ui_pref_text = pref_text(self.ui_pref).replace("界面大小 ", "")
+        self.menu.input_text = "触屏" if self.touch.enabled else "电脑"
+        self.touch.draw(surface, screen_w, screen_h, self.font)
         self.menu.draw(surface, screen_w, screen_h, self.font, self.font_big)
         self.tutorial.draw(surface, screen_w, screen_h, self.font, self.font_big)
 

@@ -2,10 +2,24 @@
 import pygame
 import math
 from settings import *
+from core import textures
 
-T_GRASS, T_DIRT, T_ROCK, T_WATER, T_TREE, T_BERRY, T_IRON_ROCK = 0, 1, 2, 3, 4, 5, 6
+T_GRASS, T_DIRT, T_ROCK, T_WATER, T_TREE, T_BERRY, T_IRON_ROCK, T_METEOR = 0, 1, 2, 3, 4, 5, 6, 7
 WALKABLE = {T_GRASS, T_DIRT}
-HARVESTABLE = {T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK}
+HARVESTABLE = {T_ROCK, T_TREE, T_BERRY, T_IRON_ROCK, T_METEOR}
+RESOURCE_MAX_HP = {T_ROCK: 100, T_IRON_ROCK: 150, T_TREE: 60, T_BERRY: 30, T_METEOR: 180}
+
+
+def _tile_tex(t, c, r):
+    if t == T_GRASS: return textures.tile_variant("grass", 4, c, r)
+    if t == T_DIRT: return textures.tile_variant("dirt", 2, c, r)
+    if t == T_WATER: return textures.get(f"water_{(pygame.time.get_ticks() // 700) % 2}")
+    if t == T_ROCK: return textures.get("rock")
+    if t == T_IRON_ROCK: return textures.get("iron_rock")
+    if t == T_METEOR: return textures.get("meteor")
+    if t == T_TREE: return textures.tile_variant("tree", 3, c, r)
+    if t == T_BERRY: return textures.get("berry")
+    return None
 
 
 class World:
@@ -33,7 +47,8 @@ class World:
     def _generate(self):
         rng = self.rng
         # 随机地形和树、石头
-        for _ in range(120):
+        area = (self.cols * self.rows) / 4800.0      # 以 80x60 为基准按面积放大地物数量
+        for _ in range(int(120 * area)):
             cx, cy = rng.randint(0, self.cols - 1), rng.randint(0, self.rows - 1)
             r, t = rng.randint(2, 5), rng.choice([T_ROCK, T_TREE, T_DIRT])
             for y in range(max(0, cy - r), min(self.rows, cy + r)):
@@ -42,7 +57,7 @@ class World:
                         self.tiles[y][x] = t
 
         # 生成铁矿脉
-        for _ in range(8):
+        for _ in range(int(8 * area)):
             cx, cy = rng.randint(0, self.cols - 1), rng.randint(0, self.rows - 1)
             for y in range(max(0, cy - 1), min(self.rows, cy + 2)):  # 范围从 5 改成了 3x3 的区域
                 for x in range(max(0, cx - 1), min(self.cols, cx + 2)):
@@ -92,6 +107,8 @@ class World:
                 self.tiles[ty][tx] = T_DIRT; drop = ("stone", 5)
             elif t == T_IRON_ROCK:
                 self.tiles[ty][tx] = T_DIRT; drop = ("iron_ore", 3)
+            elif t == T_METEOR:
+                self.tiles[ty][tx] = T_DIRT; drop = ("iron_ore", 4)      # 另有 3 石头由采集者掉落
             elif t == T_TREE:
                 self.tiles[ty][tx] = T_GRASS; drop = ("wood", 5)
             elif t == T_BERRY:
@@ -113,8 +130,11 @@ class World:
                 sx, sy = camera.world_to_screen(c * TILE_SIZE, r * TILE_SIZE)
                 t = self.tiles[r][c]
 
-                # 恢复精细绘制
-                if t == T_GRASS:
+                # 优先用贴图（assets/textures）；没有贴图时回退到下面的程序化画法
+                tex = _tile_tex(t, c, r)
+                if tex is not None:
+                    surface.blit(tex, (sx, sy))
+                elif t == T_GRASS:
                     pygame.draw.rect(surface, GRASS if (r + c) % 2 == 0 else GRASS2, (sx, sy, TILE_SIZE, TILE_SIZE))
                 elif t == T_DIRT:
                     pygame.draw.rect(surface, DIRT, (sx, sy, TILE_SIZE, TILE_SIZE))
@@ -127,6 +147,12 @@ class World:
                                      border_radius=4)
                     pygame.draw.circle(surface, (180, 100, 80), (int(sx + 10), int(sy + 10)), 3)
                     pygame.draw.circle(surface, (180, 100, 80), (int(sx + 20), int(sy + 18)), 4)
+                elif t == T_METEOR:
+                    pygame.draw.rect(surface, DIRT, (sx, sy, TILE_SIZE, TILE_SIZE))
+                    pygame.draw.rect(surface, (60, 55, 65), (sx + 2, sy + 4, TILE_SIZE - 5, TILE_SIZE - 8), border_radius=7)
+                    pygame.draw.circle(surface, (200, 110, 60), (int(sx + 11), int(sy + 12)), 3)
+                    pygame.draw.circle(surface, (230, 150, 70), (int(sx + 21), int(sy + 19)), 2)
+                    pygame.draw.circle(surface, (150, 150, 160), (int(sx + 17), int(sy + 9)), 2)
                 elif t == T_WATER:
                     pygame.draw.rect(surface, WATER, (sx, sy, TILE_SIZE, TILE_SIZE))
                 elif t == T_TREE:
@@ -144,8 +170,7 @@ class World:
 
                 key = (c, r)
                 if key in self.resource_hp:
-                    hp, max_hp = self.resource_hp[key], {T_ROCK: 100, T_IRON_ROCK: 150, T_TREE: 60, T_BERRY: 30}.get(t,
-                                                                                                                     100)
+                    hp, max_hp = self.resource_hp[key], RESOURCE_MAX_HP.get(t, 100)
                     if hp < max_hp and hp > 0:
                         pygame.draw.rect(surface, (40, 40, 40), (sx + 2, sy + TILE_SIZE - 6, TILE_SIZE - 4, 3))
                         pygame.draw.rect(surface, (255, 200, 60),

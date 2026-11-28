@@ -3,6 +3,7 @@ import pygame
 from settings import WHITE
 from world.buildings import BUILDING_DEFS
 from world.items import ITEM_DEFS
+from combat.weapons import WEAPONS, CRAFT_GROUPS, CRAFT_COST
 from core import commands as cmdlib
 
 
@@ -58,6 +59,19 @@ class BuildingHUD:
                 num = 0
             self.edit_text = ""
             self.emit(cmdlib.make("bld_smelt_set", n=num, **self._pos(selected_building)))
+
+    def _draw_team_toggle(self, surface, b, x, y, w):
+        """工作站的使用规则：单人（一人做，新指令会换人）/ 协作（最多 N 人一起做）。"""
+        r1 = pygame.Rect(x + 10, y, 120, 26)
+        pygame.draw.rect(surface, (70, 120, 90) if b.team else (110, 90, 70), r1, border_radius=4)
+        surface.blit(self.font.render("模式: 协作" if b.team else "模式: 单人", True, WHITE), (r1.x + 8, r1.y + 5))
+        self.btn_rects["toggle_team"] = r1
+        if b.team:
+            r2 = pygame.Rect(x + 140, y, 110, 26)
+            pygame.draw.rect(surface, (60, 90, 120), r2, border_radius=4)
+            surface.blit(self.font.render(f"最多 {b.team_cap} 人", True, WHITE), (r2.x + 8, r2.y + 5))
+            self.btn_rects["team_cap"] = r2
+        surface.blit(self.font.render(f"在岗: {len(b.workers)} 人", True, (170, 200, 170)), (x + 10, y + 30))
 
     def handle_key(self, event, selected_building):
         if self.active_input:
@@ -146,10 +160,15 @@ class BuildingHUD:
 
                 for action, rect in self.btn_rects.items():
                     if rect.collidepoint(mouse_pos):
-                        item = {"craft_stone_pick": "stone_pickaxe", "craft_axe": "axe",
-                                "craft_pick": "iron_pickaxe", "craft_sword": "longsword",
-                                "craft_gun": "gun", "craft_pistol": "pistol",
-                                "craft_rifle": "rifle"}.get(action)
+                        if action == "toggle_team":
+                            self.emit(cmdlib.make("bld_station_mode", team=not selected_building.team,
+                                                  cap=selected_building.team_cap, **self._pos(selected_building)))
+                            return True, None
+                        if action == "team_cap":
+                            self.emit(cmdlib.make("bld_station_mode", team=selected_building.team,
+                                                  cap=selected_building.team_cap % 10 + 1, **self._pos(selected_building)))
+                            return True, None
+                        item = action[6:] if action.startswith("craft:") else None
                         if item:
                             self.emit(cmdlib.make("bld_craft_add", item=item, **self._pos(selected_building)))
                         return True, None
@@ -176,7 +195,9 @@ class BuildingHUD:
         if selected_building.kind in ("stove", "furnace"):
             h = 380
         elif selected_building.kind == "workbench":
-            h = 420
+            h = 625
+        elif selected_building.kind == "research_bench":
+            h = 200
         elif selected_building.kind in ("small_cabinet", "large_cabinet"):
             h = 500
         elif is_blueprint:
@@ -325,78 +346,39 @@ class BuildingHUD:
 
 
         elif selected_building.kind == "workbench":
+            self._draw_team_toggle(surface, selected_building, x, y + 85, w)
+            yy = y + 118
+            bw = (w - 20 - 8) // 3
+            comp = research.completed if research else set()
+            for title_, tech_, keys_ in CRAFT_GROUPS:
+                unlocked = tech_ is None or tech_ in comp
+                surface.blit(self.font.render(title_ + ("" if unlocked else "（未研究）"), True,
+                                              (200, 200, 100) if unlocked else (120, 120, 120)), (x + 10, yy))
+                yy += 20
+                for n_, key_ in enumerate(keys_):
+                    r_ = pygame.Rect(x + 10 + (n_ % 3) * (bw + 4), yy + (n_ // 3) * 29, bw, 25)
+                    wd_ = WEAPONS[key_]
+                    cost_ = "".join(f"{v}{ITEM_DEFS[k]['name'][0]}" for k, v in CRAFT_COST[key_].items())
+                    pygame.draw.rect(surface, (95, 100, 115) if unlocked else (55, 55, 55), r_, border_radius=4)
+                    surface.blit(self.font.render(f"{wd_['name']}({cost_})", True,
+                                                  (235, 235, 240) if unlocked else (110, 110, 110)), (r_.x + 4, r_.y + 5))
+                    if unlocked: self.btn_rects["craft:" + key_] = r_
+                yy += ((len(keys_) + 2) // 3) * 29 + 6
+            q_ = selected_building.craft_queue
+            surface.blit(self.font.render(f"制造队列: {len(q_)}" + (f"（当前: {WEAPONS[q_[0]['item']]['name'] if q_[0]['item'] in WEAPONS else '枪械'}）" if q_ else ""),
+                                          True, WHITE), (x + 10, yy))
+            if selected_building.craft_progress > 0:
+                ratio_ = min(1.0, selected_building.craft_progress / 150.0)
+                pygame.draw.rect(surface, (40, 40, 40), (x + 10, yy + 22, w - 20, 8))
+                pygame.draw.rect(surface, (120, 200, 255), (x + 10, yy + 22, int((w - 20) * ratio_), 8))
 
-            surface.blit(self.font.render("制造装备:", True, (200, 200, 100)), (x + 10, y + 100))
-
-            r1 = pygame.Rect(x + 10, y + 130, 80, 30)
-
-            r2 = pygame.Rect(x + 100, y + 130, 80, 30)
-
-            r3 = pygame.Rect(x + 190, y + 130, 80, 30)
-
-            r4 = pygame.Rect(x + 10, y + 170, 80, 30)
-
-            r5 = pygame.Rect(x + 100, y + 170, 80, 30)
-
-            r6 = pygame.Rect(x + 190, y + 170, 80, 30)
-
-            can_iron = research and "crafting" in research.completed
-
-            can_gun = research and "gunsmithing" in research.completed
-
-            col_stone = (130, 130, 135)
-
-            col2 = (150, 150, 150) if can_iron else (60, 60, 60)
-
-            col3 = (150, 150, 150) if can_iron else (60, 60, 60)
-
-            col4 = (200, 200, 210) if can_iron else (60, 60, 60)
-
-            col5 = (100, 120, 180) if can_gun else (60, 60, 60)
-
-            col6 = (110, 80, 80) if can_gun else (60, 60, 60)
-
-            pygame.draw.rect(surface, col_stone, r1, border_radius=4)
-
-            surface.blit(self.font.render("石镐(2石)", True, (0, 0, 0)), (x + 15, y + 137))
-
-            pygame.draw.rect(surface, col2, r2, border_radius=4)
-
-            surface.blit(self.font.render("铁斧(2铁)", True, (0, 0, 0)), (x + 105, y + 137))
-
-            pygame.draw.rect(surface, col3, r3, border_radius=4)
-
-            surface.blit(self.font.render("铁镐(2铁)", True, (0, 0, 0)), (x + 195, y + 137))
-
-            pygame.draw.rect(surface, col4, r4, border_radius=4)
-
-            surface.blit(self.font.render("长剑(3铁)", True, (0, 0, 0)), (x + 15, y + 177))
-
-            pygame.draw.rect(surface, col5, r5, border_radius=4)
-
-            surface.blit(self.font.render("手枪(3铁)", True, (255, 255, 255)), (x + 105, y + 177))
-
-            pygame.draw.rect(surface, col6, r6, border_radius=4)
-
-            surface.blit(self.font.render("步枪(6铁)", True, (255, 255, 255)), (x + 195, y + 177))
-
-            self.btn_rects["craft_stone_pick"] = r1
-
-            if can_iron:
-                self.btn_rects["craft_axe"] = r2
-
-                self.btn_rects["craft_pick"] = r3
-
-                self.btn_rects["craft_sword"] = r4
-
-            if can_gun:
-                self.btn_rects["craft_pistol"] = r5
-
-                self.btn_rects["craft_rifle"] = r6
-
-            surface.blit(self.font.render(f"制造队列: {len(selected_building.craft_queue)}", True, WHITE),
-
-                         (x + 10, y + 215))
+        elif selected_building.kind == "research_bench":
+            self._draw_team_toggle(surface, selected_building, x, y + 95, w)
+            cur = research.current_research if research else None
+            from systems.research import TECHS as _T
+            surface.blit(self.font.render("当前研究: " + (_T[cur]["name"] if cur else "（未选，按 R）"), True, (200, 220, 255)),
+                         (x + 10, y + 135))
+            surface.blit(self.font.render("协作时每人都加研究进度，2 人≈2 倍速", True, (150, 150, 150)), (x + 10, y + 160))
 
         elif selected_building.kind in ("small_cabinet", "large_cabinet"):
             pygame.draw.line(surface, (80, 80, 80), (x + 10, y + 85), (x + w - 10, y + 85), 1)

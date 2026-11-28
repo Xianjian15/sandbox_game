@@ -31,7 +31,7 @@ COMMAND_TYPES = {
     "stockpile_add", "stockpile_remove", "farm_add",
     "build_area", "deconstruct_area", "harvest_area", "hunt_area",
     # —— 建筑面板 ——
-    "bld_decon", "bld_craft_add", "bld_cook_set", "bld_cook_clear", "bld_smelt_set", "bld_smelt_clear",
+    "bld_decon", "bld_station_mode", "bld_craft_add", "bld_cook_set", "bld_cook_clear", "bld_smelt_set", "bld_smelt_clear",
     # —— 其他 ——
     "research_set", "toggle_haul", "speed",
 }

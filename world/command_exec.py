@@ -10,16 +10,19 @@
   * 日志(log)只是界面反馈，不属于模拟状态，可以在这里写。
 """
 from world.buildings import BUILDING_DEFS
+from combat.weapons import CRAFT_COST, EQUIPPABLE
 from world.items import ITEM_DEFS
 from systems.research import TECHS
 
 # 装备类物品：默认不允许搬运（需在物品面板打开"允许搬运"）
-EQUIP_KINDS = {"stone_pickaxe", "iron_pickaxe", "axe", "longsword",
+EQUIP_KINDS = set(EQUIPPABLE) | {"stone_pickaxe", "iron_pickaxe", "axe", "longsword",
+               "stone_axe", "stone_spear", "stone_hammer", "stone_knife",
                "pistol", "rifle", "gun", "club", "spear"}
 
+MAX_TEAM_CAP = 10                      # 研究台/工作台协作人数上限的最大可选值
 CABINETS = ("small_cabinet", "large_cabinet")
 STATION_KIND = {"craft": "workbench", "research": "research_bench", "cook": "stove", "smelt": "furnace"}
-CRAFT_ITEMS = {"stone_pickaxe", "axe", "iron_pickaxe", "longsword", "gun", "pistol", "rifle"}
+CRAFT_ITEMS = set(CRAFT_COST)
 
 
 # ---------------- 辅助 ----------------
@@ -95,11 +98,9 @@ def _station(g, cmd):
             return
         qcmd = {"type": "craft", "world": g.world, "items": g.items,
                 "stockpiles": g.stockpiles, "buildings": g.buildings, "bench": b}
-        if not shift:
-            for c in sel: _reset(c, clear_targets=False)
-            sel[0].assign_craft(g.world, g.items, g.stockpiles, g.buildings, b)
-        else:
-            for c in sel: c.enqueue_command(qcmd)
+        g._command_station(sel, shift, b, qcmd,
+                           lambda c: c.assign_craft(g.world, g.items, g.stockpiles, g.buildings, b),
+                           "没法去制作（材料不足或够不着）")
     elif kind == "research":
         if not g.research_mgr.current_research:
             g.log.add("请先在科技菜单（R）选择研究项目", (255, 200, 100))
@@ -318,7 +319,19 @@ def _bld_decon(g, cmd):
 def _bld_craft_add(g, cmd):
     b = _building(g, cmd["tx"], cmd["ty"], cmd.get("layer"))
     if b is not None and b.kind == "workbench" and cmd["item"] in CRAFT_ITEMS:
+        from combat.weapons import CRAFT_GROUPS
+        need_tech = next((t for _, t, ks in CRAFT_GROUPS if cmd["item"] in ks), None)
+        if need_tech is not None and need_tech not in g.research_mgr.completed:
+            return                                   # 科技没研究：忽略（界面上按钮本来就是灰的）
         b.craft_queue.append({"item": cmd["item"]})
+
+
+def _bld_station_mode(g, cmd):
+    """研究台/工作台：单人使用 ↔ 多人协作（team=True 时最多 team_cap 人同时干）。"""
+    b = _building(g, cmd["tx"], cmd["ty"], cmd.get("layer"))
+    if b is not None and b.kind in ("workbench", "research_bench"):
+        b.team = bool(cmd["team"])
+        b.team_cap = max(1, min(MAX_TEAM_CAP, int(cmd.get("cap", b.team_cap))))
 
 
 def _bld_cook_set(g, cmd):
@@ -376,7 +389,7 @@ HANDLERS = {
     "stockpile_add": _stockpile_add, "stockpile_remove": _stockpile_remove, "farm_add": _farm_add,
     "build_area": _build_area, "deconstruct_area": _deconstruct_area,
     "harvest_area": _harvest_area, "hunt_area": _hunt_area,
-    "bld_decon": _bld_decon, "bld_craft_add": _bld_craft_add, "bld_cook_set": _bld_cook_set,
+    "bld_decon": _bld_decon, "bld_station_mode": _bld_station_mode, "bld_craft_add": _bld_craft_add, "bld_cook_set": _bld_cook_set,
     "bld_cook_clear": _bld_cook_clear, "bld_smelt_set": _bld_smelt_set, "bld_smelt_clear": _bld_smelt_clear,
     "research_set": _research_set, "toggle_haul": _toggle_haul, "speed": _speed,
 }

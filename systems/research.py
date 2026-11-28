@@ -6,6 +6,9 @@ TECHS = {
     "smelting": {"name": "粗铁精炼", "cost": 200.0, "desc": "解锁熔炉，可以将粗铁精炼为铁。", "requires": ["stone_masonry"], "unlocks": ["furnace"]},
     "crafting": {"name": "基础锻造", "cost": 250.0, "desc": "解锁铁斧、铁镐、长剑的制作。", "requires": ["smelting"], "unlocks": ["iron_gear"]},
     # 修改：枪械制造的前置由 crafting 改为 smelting（只需粗铁精炼即可）
+    "tailoring": {"name": "纺织缝纫", "cost": 150.0, "desc": "解锁羊毛地毯、羽绒软床（用狩猎得到的羊毛、羽毛）。", "requires": ["agriculture"], "unlocks": ["carpet"]},
+    "iron_construction": {"name": "钢铁建筑", "cost": 180.0, "desc": "解锁铁地板、铁墙、铁窗、铁门，比石头更坚固。", "requires": ["smelting"], "unlocks": ["iron_material"]},
+    "advanced_firearms": {"name": "高级枪械", "cost": 500.0, "desc": "解锁霰弹枪、冲锋枪、狙击枪的制作。", "requires": ["gunsmithing"], "unlocks": ["adv_guns"]},
     "gunsmithing": {"name": "枪械制造", "cost": 400.0, "desc": "解锁枪械制作。", "requires": ["smelting"], "unlocks": ["guns"]}
 }
 
@@ -37,6 +40,11 @@ class ResearchManager:
         if kind in ("furnace",) and "smelting" not in self.completed: return False
         if kind in ("workbench",) and "stone_masonry" not in self.completed: return False
         if kind in ("medical_bed", "sterile_floor", "sterile_wall") and "herbal_medicine" not in self.completed: return False
+        if kind in ("floor", "wall", "door", "window") and material == "iron" and "iron_construction" not in self.completed: return False
+        if material == "wool" and "tailoring" not in self.completed: return False
+        if kind == "bed" and material == "feather" and "tailoring" not in self.completed: return False
+        if kind == "fountain" and "stone_masonry" not in self.completed: return False
+        if kind == "statue" and "stone_masonry" not in self.completed: return False
         if kind == "floor" and material == "stone" and "stone_masonry" not in self.completed: return False
         if kind in ("wall", "door", "window") and material == "stone" and "stone_masonry" not in self.completed: return False
         return True

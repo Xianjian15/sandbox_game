@@ -1,5 +1,6 @@
 # world/farm.py
 import pygame
+from core import textures
 from settings import TILE_SIZE
 
 
@@ -50,7 +51,11 @@ class FarmZone:
             data = self.plots[(tx, ty)]
             if data["planted"]:
                 growth = data["growth"]
-                if self.plant_type == "berry":
+                ptex = textures.get(f"plant_{self.plant_type}_ripe" if growth >= 1.0
+                                    else f"plant_{self.plant_type}_{min(2, int(growth * 3))}")
+                if ptex is not None:
+                    surface.blit(ptex, (sx, sy))
+                elif self.plant_type == "berry":
                     if growth < 1.0:
                         pygame.draw.circle(surface, (80, 180, 80), (int(sx + TILE_SIZE / 2), int(sy + TILE_SIZE / 2)),
                                            int(TILE_SIZE / 4 * growth + 2))
