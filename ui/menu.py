@@ -167,11 +167,12 @@ class MenuModel:
         if self.screen == "main":
             label(DISPLAY_NAME, h // 2 - 190, big=True)
             label(f"殖民地建设 · 手动指挥 · 局域网多人联机（最多 {MAX_PLAYERS} 人）", h // 2 - 130, color="dim")
-            button("单人游戏", h // 2 - 70, "single")
-            button("多人游戏", h // 2 + 2, "multi")
-            button("新手教程", h // 2 + 74, "tutorial")
-            button(f"角色设置（{GENDER_NAMES[self.profile.gender]}）", h // 2 + 146, "profile_main")
-            button("退出", h // 2 + 218, "quit")
+            button("单人游戏", h // 2 - 80, "single")
+            button("多人游戏", h // 2 - 18, "multi")
+            button("新手教程", h // 2 + 44, "tutorial")
+            button(f"角色设置（{GENDER_NAMES[self.profile.gender]}）", h // 2 + 106, "profile_main")
+            button("设置（操作模式 / 音量）", h // 2 + 168, "settings")
+            button("退出", h // 2 + 230, "quit")
 
         elif self.screen == "lobby":
             label("多人游戏 · 局域网房间", 60, big=True)
@@ -361,7 +362,9 @@ class MenuModel:
 
     # ---------------- 动作 ----------------
     def do(self, action, data=None):
-        if action == "single":
+        if action == "settings":
+            self.result = {"mode": "settings"}
+        elif action == "single":
             self.result = {"mode": "single"}
         elif action == "tutorial":
             self.result = {"mode": "single", "tutorial": True}      # 开一局单人游戏并直接打开教程
@@ -607,6 +610,7 @@ def run_menu(screen, fonts, clock, cfg=None):
                 elif event.type == pygame.MOUSEMOTION:
                     model.hover(uis.to_logical(event.pos, scale), w, h)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if cfg.get("audio") is not None: cfg["audio"].play("click")
                     model.click(uis.to_logical(event.pos, scale), w, h)
                 elif event.type == pygame.KEYDOWN and event.key in keymap:
                     model.key(keymap[event.key])
@@ -617,6 +621,7 @@ def run_menu(screen, fonts, clock, cfg=None):
                 elif event.type == pygame.DROPFILE:
                     model.drop_file(event.file)
             model.update()
+            if cfg.get("audio") is not None: cfg["audio"].update()
             scale = uis.compute_scale(*screen.get_size(), pref)
             draw_menu(layer.begin(screen, scale), fonts, model)
             layer.end(screen)

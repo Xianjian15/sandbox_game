@@ -6,10 +6,13 @@
 动作：resume 继续 / tutorial 教程 / help 快捷键速查 / input 切换 电脑·触屏 操作模式 / ui_minus、ui_plus 界面大小 / fullscreen / menu 返回主菜单 / quit 退出。
 resume/tutorial/help 由 GameWorld 自己处理，其余通过 game.app_request 交给 main（只有 main 能改窗口、退出）。
 """
+from ui.settings_panel import SettingsPanel
+
 ITEMS = [
     ("resume", "继续游戏  (M / Esc)"),
     ("tutorial", "新手教程  (F1)"),
     ("help", "快捷键速查  (H)"),
+    ("settings", "设置（操作模式 / 音量）"),
     ("ui", "界面大小"),                 # 特殊行：中间显示百分比，左右两个小按钮
     ("input", "操作模式"),               # 点一下在 电脑 / 触屏 之间切换（文字里显示当前模式）
     ("fullscreen", "全屏 / 窗口  (F11)"),
@@ -27,10 +30,13 @@ class GameMenu:
         self.rects = {}            # 名称 -> Rect（逻辑坐标，绘制时更新）
         self.ui_pref_text = ""
         self.input_text = "电脑"
+        self.page = "main"                  # "main" 菜单 / "settings" 设置页
+        self.panel = SettingsPanel()
 
     def open(self):
         self.active = True
         self.sel = 0
+        self.page = "main"
 
     def close(self):
         self.active = False
@@ -39,8 +45,19 @@ class GameMenu:
         self.close() if self.active else self.open()
 
     # 返回动作名（或 None）
+    def _from_panel(self, act):
+        if act == "back":
+            self.page = "main"
+            return None
+        return act
+
     def handle_key(self, key):
         import pygame
+        if self.page == "settings":
+            if key == pygame.K_m:
+                self.close()
+                return "resume"
+            return self._from_panel(self.panel.handle_key(key))
         if key in (pygame.K_ESCAPE, pygame.K_m):
             self.close()
             return "resume"
@@ -57,7 +74,14 @@ class GameMenu:
             return None if name == "ui" else name
         return None
 
+    def handle_release(self):
+        if self.page == "settings":
+            self.panel.handle_release()
+
     def handle_motion(self, pos):
+        if self.page == "settings":
+            self.panel.handle_motion(pos)
+            return
         for i, (name, _) in enumerate(ITEMS):
             r = self.rects.get(name)
             if r and r.collidepoint(pos):
@@ -65,6 +89,8 @@ class GameMenu:
                 return
 
     def handle_click(self, pos):
+        if self.page == "settings":
+            return self._from_panel(self.panel.handle_click(pos))
         for name in ("ui_minus", "ui_plus"):
             r = self.rects.get(name)
             if r and r.collidepoint(pos):
@@ -82,6 +108,10 @@ class GameMenu:
         dim = pygame.Surface((w, h), pygame.SRCALPHA)
         dim.fill((0, 0, 0, 140))
         surface.blit(dim, (0, 0))
+        if self.page == "settings":
+            self.panel.input_text, self.panel.ui_text = self.input_text, self.ui_pref_text
+            self.panel.draw(surface, w, h, font, font_big)
+            return
         row_h, gap = 44, 10
         ph = 70 + len(ITEMS) * (row_h + gap) + 36
         pw = self.W

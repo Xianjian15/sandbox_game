@@ -128,6 +128,7 @@ class QuestManager:
         self.active.append(q)
         g.log.add(f"新支线任务：{title}", (255, 220, 100))
         g.toast(f"新支线任务：{title}（Q 查看）", 3.0)
+        g.sfx("quest_new")
         return q
 
     def _chain_step(self, g, ci):
@@ -197,6 +198,7 @@ class QuestManager:
         g.log.add(f"任务完成：{q['title']}  奖励：{rtxt}", (120, 255, 140))
         g.warning_text = f"任务完成：{q['title']}  奖励：{rtxt}"
         g.warning_timer = 3.5
+        g.sfx("quest_done")
         self.completed_titles.append(q["title"])
         del self.completed_titles[:-5]
         if q["chain"] >= 0:

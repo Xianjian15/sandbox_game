@@ -1,6 +1,7 @@
 # world/game_world.py
 import random
 import pygame
+from core.audio import weapon_sound
 
 from ui.tutorial import Tutorial
 from ui.game_menu import GameMenu
@@ -170,6 +171,9 @@ class GameWorld:
         self.current_build_mat = None
         self.build_rotation = 0
         self.show_help = False
+        from core.audio import NullAudio
+        self.audio = NullAudio()                         # 音频：main 会换成真正的 AudioManager（纯播放，不影响模拟）
+        self._nb_prev, self._res_prev, self._battle_until = 0, len(self.world.resource_hp), 0.0
         self.menu = GameMenu()                           # 游戏中菜单（M）
         self.app_request = None                          # 需要 main 处理的请求：fullscreen/menu/quit/ui_plus/ui_minus
         self.tutorial = Tutorial()                       # 新手教程（F1 / 首次启动 / 主菜单）
@@ -329,6 +333,15 @@ class GameWorld:
         self._update_ui_scale(*self.native_size)
         self.toast_text, self.toast_timer = pref_text(pref), 1.5
 
+    def sfx(self, name, x=None, y=None):
+        """播放音效。给了世界坐标 (x, y) 时按离镜头中心的距离减小音量。"""
+        vol = 1.0
+        if x is not None:
+            from core.audio import distance_volume
+            cx, cy = self.camera.x + self.camera.vw / 2, self.camera.y + self.camera.vh / 2
+            vol = distance_volume(((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 / TILE_SIZE)
+        self.audio.play(name, vol)
+
     def toast(self, text, secs=2.5):
         self.toast_text, self.toast_timer = text, secs
 
@@ -415,6 +428,10 @@ class GameWorld:
         if event.type == pygame.VIDEORESIZE:
             return
 
+        if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and getattr(event, "pos", None) is not None
+                and (self.menu.active or self.is_mouse_in_ui(event.pos))):
+            self.audio.play("click")                        # 点界面的"嗒"声
+
         if self.tutorial.active:                            # 教程打开时吞掉所有输入（不影响游戏运行）
             if event.type == pygame.KEYDOWN:
                 self.tutorial.handle_key(event.key)
@@ -432,6 +449,8 @@ class GameWorld:
                 self.menu.handle_motion(lpos)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and lpos is not None:
                 act = self.menu.handle_click(lpos)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.menu.handle_release()
             if act:
                 self._menu_action(act)
             return
@@ -511,6 +530,7 @@ class GameWorld:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             clicked_mode = self.toolbar.handle_click(lpos)
             if clicked_mode != "NOT_CLICKED":
+                self.audio.play("click")
                 if clicked_mode == "close":
                     self.mode = None
                     self.current_build_kind = None
@@ -578,9 +598,11 @@ class GameWorld:
             self.menu.close(); self.show_help = True
         elif act == "input":
             self.touch.toggle()                 # 电脑 ↔ 触屏；菜单保持打开
+        elif act == "settings":
+            self.menu.page = "settings"
         else:
             self.app_request = act            # fullscreen / menu / quit / ui_plus / ui_minus：由 main 处理
-            if act not in ("ui_plus", "ui_minus"):
+            if act not in ("ui_plus", "ui_minus") and not (act == "fullscreen" and self.menu.page == "settings"):
                 self.menu.close()
 
     def _handle_keydown(self, event, mouse_pos, screen_w, screen_h):
@@ -979,6 +1001,7 @@ class GameWorld:
         msg = f"陨石坠落！在殖民地{ns}{ew or ''}方 ({cx},{cy}) 附近形成了陨石堆（需要镐才能采集）"
         self.log.add(msg, (255, 180, 80))
         self.warning_text = msg
+        self.sfx("meteor")
         self.warning_timer = 4.0
 
     def _spawn_herd(self):
@@ -1043,6 +1066,7 @@ class GameWorld:
         msg = f"警告：发现 {spawned} 名敌人入侵！"
         self.log.add(msg, (255, 50, 50))
         self.warning_text = msg
+        self.sfx("alarm")
         self.warning_timer = 3.0
 
     def _world_step(self):
@@ -1104,17 +1128,20 @@ class GameWorld:
                 kind, x1, y1, x2, y2, color = c.recent_shot
                 if kind == "shot": self.effects.append(Shot(x1, y1, x2, y2, color))
                 else: self.effects.append(MeleeHit(x2, y2, color))
+                self.sfx(weapon_sound(c.weapon_key, kind), x1, y1)
                 c.recent_shot = None
         for e in self.enemies:
             if e.recent_shot is not None:
                 kind, x1, y1, x2, y2, color = e.recent_shot
                 if kind == "shot": self.effects.append(Shot(x1, y1, x2, y2, color))
                 else: self.effects.append(MeleeHit(x2, y2, color))
+                self.sfx(weapon_sound(e.weapon_key, kind), x1, y1)
                 e.recent_shot = None
 
         for c in self.colonists:
             if c.hp <= 0:
                 self.log.add(f"{c.name} 倒下了！", (255, 80, 80))
+                self.sfx("colonist_down")
                 c._release_job()      # 否则他占着的柜子/工作台/蓝图会永远被占用
                 c.queue.clear()
                 if c.bed_tile is not None:
@@ -1127,8 +1154,15 @@ class GameWorld:
             if e.hp <= 0:
                 self.log.add(f"{e.name} 被击杀", (100, 255, 100))
                 self.quests.enemies_killed += 1
+                self.sfx("enemy_down", e.x, e.y)
         self.enemies = [e for e in self.enemies if e.hp > 0]
         self.quests.update(self)
+        nb = len(self.buildings.buildings)
+        if nb > self._nb_prev: self.sfx("build_done")
+        self._nb_prev = nb
+        nr = len(self.world.resource_hp)
+        if nr < self._res_prev: self.sfx("harvest_done")
+        self._res_prev = nr
 
     def draw(self, surface, dt_raw):
         screen_w, screen_h = surface.get_size()
@@ -1347,6 +1381,10 @@ class GameWorld:
 
         self.menu.ui_pref_text = pref_text(self.ui_pref).replace("界面大小 ", "")
         self.menu.input_text = "触屏" if self.touch.enabled else "电脑"
+        self.menu.panel.audio = self.audio
+        import time as _t
+        if self.enemies: self._battle_until = _t.monotonic() + 10.0         # 战斗曲：敌人消失后再持续 10 秒，避免来回切
+        self.audio.set_music("battle" if _t.monotonic() < self._battle_until else "night" if self.game_time.is_night else "day")
         self.touch.draw(surface, screen_w, screen_h, self.font)
         self.menu.draw(surface, screen_w, screen_h, self.font, self.font_big)
         self.tutorial.draw(surface, screen_w, screen_h, self.font, self.font_big)

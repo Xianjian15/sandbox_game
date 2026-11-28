@@ -15,6 +15,8 @@ from core.app_paths import setup_logging, report_crash, data_file, resource_path
 from core.version import GAME_VERSION, DISPLAY_NAME
 from core.profile import Profile, sanitize_name
 from core import ui_scale as uis
+from core.audio import AudioManager, NullAudio
+from ui.settings_panel import SettingsPanel
 
 UI_STATE = {"pref": uis.DEFAULT_PREF}        # 玩家的界面大小偏好（Ctrl +/- 调整，存 ui.json）
 _MSG_LAYER = uis.UiLayer(alpha=False)
@@ -22,6 +24,7 @@ _CONFIRM_LAYER = uis.UiLayer(alpha=True)
 
 
 FORCE_TOUCH = False
+AUDIO = NullAudio()            # main() 里换成真正的 AudioManager
 
 
 def _load_input_mode():
@@ -110,6 +113,53 @@ def draw_confirm(screen, font, online, scale=1.0):
     _CONFIRM_LAYER.end(screen_real)
 
 
+def run_settings(screen, fonts, clock):
+    """主菜单的设置页（操作模式 / 音量 / 界面大小）。返回 "back" 或 "quit"。"""
+    panel = SettingsPanel()
+    panel.audio = AUDIO
+    panel.has_fullscreen = False
+    layer = uis.UiLayer(alpha=False)
+    touch_on = _load_input_mode() or FORCE_TOUCH
+    while True:
+        scale = uis.compute_scale(*screen.get_size(), UI_STATE["pref"])
+        w, h = uis.logical_size(*screen.get_size(), scale)
+        for event in pygame.event.get():
+            act = None
+            if event.type == pygame.QUIT:
+                return "quit"
+            elif event.type == pygame.VIDEORESIZE:
+                screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+            elif event.type == pygame.KEYDOWN:
+                delta = uis.pref_delta_for_key(event.key, event.mod)
+                if delta is not None:
+                    change_ui_pref(delta)
+                else:
+                    act = panel.handle_key(event.key)
+            elif event.type == pygame.MOUSEMOTION:
+                panel.handle_motion(uis.to_logical(event.pos, scale))
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                AUDIO.play("click")
+                act = panel.handle_click(uis.to_logical(event.pos, scale))
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                panel.handle_release()
+            if act == "back":
+                return "back"
+            elif act == "input":
+                touch_on = not touch_on
+                _save_input_mode(touch_on)
+            elif act in ("ui_plus", "ui_minus"):
+                change_ui_pref(1 if act == "ui_plus" else -1)
+        panel.input_text = "触屏" if touch_on else "电脑"
+        panel.ui_text = uis.pref_text(UI_STATE["pref"]).replace("界面大小 ", "")
+        surf = layer.begin(screen, uis.compute_scale(*screen.get_size(), UI_STATE["pref"]))
+        surf.fill((16, 18, 24))
+        panel.draw(surf, *surf.get_size(), fonts["normal"], fonts["big"])
+        layer.end(screen)
+        AUDIO.update()
+        pygame.display.flip()
+        clock.tick(30)
+
+
 def play(screen, clock, fonts, session, seed, show_tutorial=False, profile=None):
     """开一局游戏（单机或联机），直到玩家关窗口或选择返回主菜单。返回 ("quit"/"menu", screen)。"""
     font, font_big, font_small, font_warn = fonts["normal"], fonts["big"], fonts["small"], fonts["warn"]
@@ -125,6 +175,7 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False, profile=None)
         game = GameWorld(font, font_big, font_small, font_warn, INIT_W, INIT_H, seed=seed)
         if profile is not None:
             game.apply_genders([profile.gender])           # 单人：自己选的性别
+    game.audio = AUDIO
     game.ui_pref = UI_STATE["pref"]
     game.touch.on_change = lambda on: _save_input_mode(on)
     game.touch.set_enabled(_load_input_mode() or FORCE_TOUCH, notify=False)      # 记住上次的操作模式（--touch 强制触屏）
@@ -226,6 +277,7 @@ def play(screen, clock, fonts, session, seed, show_tutorial=False, profile=None)
         game.edge_scroll(pygame.mouse.get_pos(), screen_w, screen_h, dt_raw)      # 相机边缘滚动（菜单/教程打开时不滚）
 
         game.tick_ui(dt_raw)
+        AUDIO.update()                                               # 音乐切换（淡出 → 淡入）
 
         # ---- 固定步长模拟 ----
         # 倍速只改变"每秒跑多少个 tick"，每个 tick 的步长永远是 TICK_DT。
@@ -311,6 +363,8 @@ def main():
     fonts = {"normal": load_font(16), "big": load_font(20), "small": load_font(14),
              "warn": load_font(28), "title": load_font(44)}
 
+    global AUDIO
+    AUDIO = AudioManager(data_file("audio.json"))                # 没有声卡时自动静默
     UI_STATE["pref"] = uis.load_pref(data_file("ui.json"))
     profile = Profile.load(data_file("profile.json"))        # 本机玩家资料（用户名 + 头像），菜单里可修改
     if args.name:
@@ -336,10 +390,16 @@ def main():
 
     # ---- 主菜单循环 ----
     while True:
+        AUDIO.set_music("day")
         choice = run_menu(screen, fonts, clock, {"seed": args.seed, "delay": args.delay, "profile": profile,
-                                                    "ui_pref": UI_STATE["pref"], "on_ui_pref": change_ui_pref})
+                                                    "ui_pref": UI_STATE["pref"], "on_ui_pref": change_ui_pref,
+                                                    "audio": AUDIO})
         if choice["mode"] == "quit":
             break
+        if choice["mode"] == "settings":
+            if run_settings(screen, fonts, clock) == "quit":
+                break
+            continue
         session = choice.get("session")             # 单机为 None
         leave, screen = play(screen, clock, fonts, session, args.seed, show_tutorial=bool(choice.get("tutorial")), profile=profile)
         if leave == "quit":

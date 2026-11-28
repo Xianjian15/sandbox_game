@@ -82,7 +82,7 @@ def sc_navigation():
     assert m.screen == "main"
     labels = [w.text for w in m.layout(W, H) if w.kind == "button"]
     log.append(f"主菜单按钮={labels}")
-    ok = labels == ["单人游戏", "多人游戏", "新手教程", "角色设置（男性）", "退出"]
+    ok = labels == ["单人游戏", "多人游戏", "新手教程", "角色设置（男性）", "设置（操作模式 / 音量）", "退出"]
     m.key("down"); m.key("down"); m.key("up")
     ok &= m.sel == 1
     m.key("enter")                                     # 选中"多人游戏"
